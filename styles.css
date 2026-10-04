@@ -319,3 +319,61 @@ footer {
   main { padding: 12px 10px 50px; }
   .kpis { padding: 12px 10px 4px; }
 }
+
+/* ── burst alert banner ─────────────────────────────────── */
+.alert-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 18px 0; padding: 9px 14px;
+  border: 1px solid rgba(255,84,112,.45);
+  background: rgba(255,84,112,.08);
+  border-radius: 8px; color: #ff8ba0;
+  font-size: 12.5px; letter-spacing: .02em;
+}
+.alert-banner[hidden] { display: none; }
+.alert-banner .alert-icon { color: #ff5470; font-weight: 700; }
+.alert-banner .tag {
+  margin-left: auto; font-size: 10px;
+  border: 1px solid rgba(255,84,112,.4); padding: 2px 7px;
+  border-radius: 4px; color: #ff8ba0;
+}
+
+/* ── live event stream ──────────────────────────────────── */
+.ev-panel { margin-top: 14px; }
+.ev-controls {
+  display: flex; gap: 6px; align-items: center;
+  padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap;
+}
+.chip {
+  font: inherit; font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 20px;
+  padding: 3px 11px; cursor: pointer; transition: .15s;
+}
+.chip:hover { color: var(--text); border-color: var(--faint); }
+.chip.active { color: var(--cyan); border-color: rgba(55,230,212,.5); background: rgba(55,230,212,.07); }
+.chip.paused { color: var(--amber); border-color: rgba(255,201,77,.5); background: rgba(255,201,77,.07); }
+.ev-spacer { flex: 1; }
+.ev-scroll { max-height: 260px; }
+.ev-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--faint); padding: 7px 10px; border-bottom: 1px solid var(--line); font-weight: 600;
+  position: sticky; top: 0; background: var(--panel);
+}
+.ev-table td { padding: 6px 10px; border-bottom: 1px solid rgba(29,36,56,.55); white-space: nowrap; }
+.ev-table td.path {
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--mono); color: var(--muted);
+}
+.ev-table td.ev-agent { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+.ev-sig-ok { color: #3dff9e; }
+.ev-sig-bad { color: #ff5470; }
+.ev-sig-pend { color: #ffc94d; }
+
+/* ── rate chart legend ──────────────────────────────────── */
+.rate-legend {
+  display: flex; gap: 12px; font-size: 10.5px; color: var(--muted);
+  text-transform: none; letter-spacing: .03em;
+}
+.rate-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }

@@ -33,8 +33,31 @@ test("live-capture and honesty markers are wired into the dashboard", () => {
   }
 });
 
+test("v2 surfaces — event stream, rate chart, burst alert, verdicts — are present", () => {
+  const html = read("index.html");
+  for (const marker of [
+    'id="ev-body"', 'id="ev-filters"', 'id="ev-export"',
+    'id="chart-rate"', 'id="alert-banner"', 'id="hdr-verdict"',
+    "SIGNATURE VALID", "pushEvent", "checkBurst", "verdict:",
+  ]) {
+    assert.ok(html.includes(marker), `expected marker missing: ${marker}`);
+  }
+  assert.ok(!/<script[^>]+src=|<link[^>]+href=/.test(html), "external asset reference found");
+});
+
 test("server.js guards side effects behind require.main and exports its pure functions", () => {
   const src = read("server.js");
   assert.match(src, /require\.main === module/);
-  assert.match(src, /module\.exports = \{ classify, parseLogLine/);
+  const exp = src.match(/module\.exports = \{([\s\S]*?)\};/);
+  assert.ok(exp, "module.exports block missing");
+  for (const name of [
+    "classify", "parseLogLine", "verifySignedRequest", "parseSignatureInput",
+    "signatureBase", "addVerificationKey", "resetCounters", "server",
+  ]) {
+    assert.ok(exp[1].includes(name), `export missing: ${name}`);
+  }
+  // no arbitrary keyid dereferencing — that would be an SSRF primitive
+  assert.ok(!/fetch\s*\(|https?\.request/.test(
+    src.slice(src.indexOf("RFC 9421 HTTP Message Signatures"), src.indexOf("counters = {"))
+  ), "verification module must not make outbound requests");
 });

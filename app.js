@@ -18,7 +18,7 @@ const escHtml = (s) => String(s ?? "—").replace(/[&<>]/g, (c) => ({ "&": "&amp
 /* ─── live capture state (fed by the SSE module at the end of this file) ─── */
 let liveMode = false;      // true once a real event source is attached
 let labelsMarked = false;
-const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, since: null };
+const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, valid: 0, invalid: 0, unresolved: 0, since: null };
 let pendingVerify = null;
 
 /* ───────────────────────── clock ───────────────────────── */
@@ -44,6 +44,12 @@ function renderKpis() {
     $("#kpi-agents").textContent = fmtInt(live.total);
     $("#kpi-signed").textContent = live.total ? ((live.signed / live.total) * 100).toFixed(1) + "%" : "0%";
     $("#kpi-shadow").textContent = fmtInt(live.shadow);
+    const sd = $("#kpi-signed-d");
+    if (sd) sd.textContent = `${live.valid} valid · ${live.invalid} invalid · ${live.unresolved} pending`;
+    // verification panel counters track real verdicts in live mode
+    if ($("#jwks-n")) $("#jwks-n").textContent = fmtInt(live.signed);
+    if ($("#jwks-ok")) $("#jwks-ok").textContent = fmtInt(live.valid);
+    if ($("#jwks-bad")) $("#jwks-bad").textContent = fmtInt(live.invalid);
   } else {
     $("#kpi-agents").textContent = fmtInt(kpi.agents);
     $("#kpi-signed").textContent = (kpi.signed * 100).toFixed(1) + "%";
@@ -750,6 +756,205 @@ setInterval(buildTicker, 12000);
 /* initial chart paint after layout settles */
 requestAnimationFrame(() => { drawContext(); drawCep(); drawRevenue(); });
 
+/* ═══════════════ Live event stream + rate + burst ═══════════════
+   Unified pipeline: real SSE events (ingestReal) and the simulator both
+   funnel through pushEvent(), which feeds the event table, the 10-second
+   rate buckets, and the shadow-burst detector. Panels carry the same
+   LIVE / SIM feed tag as the rest of the console. */
+
+const KIND_COLORS = { signed: "#4d9dff", known: "#37e6d4", shadow: "#ff5470", tool: "#ffc94d", human: "#8b93b5" };
+const EV_CAP = 200;               // ring buffer for export
+const EV_ROWS_VISIBLE = 60;       // DOM rows
+const BUCKET_MS = 10000;          // 10 s rate buckets
+const BUCKETS = 60;               // × 60 = 10 minutes
+const BURST_WINDOW_MS = 60000;
+const BURST_THRESHOLD = 8;
+let eventLog = [];
+let evTotal = 0;
+let evPaused = false;
+let evFilter = "all";
+let shadowTimes = [];
+const rateBuckets = [];
+
+function bucketAt(t) {
+  const bt = Math.floor(t / BUCKET_MS) * BUCKET_MS;
+  const empty = (x) => ({ t: x, signed: 0, known: 0, shadow: 0, tool: 0, human: 0 });
+  if (!rateBuckets.length) {
+    for (let x = bt - (BUCKETS - 1) * BUCKET_MS; x <= bt; x += BUCKET_MS) rateBuckets.push(empty(x));
+    return rateBuckets[rateBuckets.length - 1];
+  }
+  const last = rateBuckets[rateBuckets.length - 1];
+  if (bt > last.t) {
+    for (let x = last.t + BUCKET_MS; x <= bt; x += BUCKET_MS) rateBuckets.push(empty(x));
+    while (rateBuckets.length > BUCKETS) rateBuckets.shift();
+    return rateBuckets[rateBuckets.length - 1];
+  }
+  if (bt < rateBuckets[0].t) return null; // outside the 10-minute window
+  return rateBuckets.find((b) => b.t === bt) || last;
+}
+
+function evRowHtml(ev) {
+  const c = KIND_COLORS[ev.kind] || "#8b93b5";
+  let sig = '<span class="dim">—</span>';
+  if (ev.sig === "valid") sig = '<span class="ev-sig-ok">✓ valid</span>';
+  else if (ev.sig === "invalid") sig = '<span class="ev-sig-bad">✗ invalid</span>';
+  else if (ev.sig === "unresolved") sig = '<span class="ev-sig-pend">? no key</span>';
+  else if (ev.sig) sig = `<span class="ev-sig-pend">${escHtml(String(ev.sig))}</span>`;
+  return `<td class="dim">${new Date(ev.t).toISOString().slice(11, 19)}</td>
+<td><span class="ev-dot" style="background:${c}"></span>${ev.kind}</td>
+<td class="mono">${escHtml(ev.method)}</td>
+<td class="path" title="${escHtml(ev.path)}">${escHtml(ev.path)}</td>
+<td class="mono ev-agent">${escHtml(ev.agent)}</td>
+<td>${ev.status}</td>
+<td class="dim">${ev.ms}</td>
+<td>${sig}</td>`;
+}
+
+function renderEventRow(ev) {
+  const body = $("#ev-body");
+  if (!body) return;
+  const tr = document.createElement("tr");
+  tr.innerHTML = evRowHtml(ev);
+  body.prepend(tr);
+  while (body.children.length > EV_ROWS_VISIBLE) body.lastChild.remove();
+}
+
+function renderEventList() {
+  const body = $("#ev-body");
+  if (!body) return;
+  body.innerHTML = "";
+  for (const ev of eventLog) {
+    if (evFilter !== "all" && ev.kind !== evFilter) continue;
+    const tr = document.createElement("tr");
+    tr.innerHTML = evRowHtml(ev);
+    body.appendChild(tr);
+    if (body.children.length >= EV_ROWS_VISIBLE) break;
+  }
+}
+
+function updateEvCount() {
+  const el = $("#ev-count");
+  if (el) el.textContent = `${fmtInt(evTotal)} captured`;
+}
+
+function pushEvent(ev) {
+  eventLog.unshift(ev);
+  if (eventLog.length > EV_CAP) eventLog.pop();
+  evTotal++;
+  const b = bucketAt(ev.t);
+  if (b && Object.prototype.hasOwnProperty.call(b, ev.kind)) b[ev.kind]++;
+  if (ev.kind === "shadow") { shadowTimes.push(ev.t); checkBurst(); }
+  if (!evPaused && (evFilter === "all" || evFilter === ev.kind)) renderEventRow(ev);
+  updateEvCount();
+}
+
+/* rate chart: stacked 10 s buckets, newest at the right */
+function drawRate() {
+  const cv = $("#chart-rate");
+  if (!cv || !cv.clientWidth) return;
+  const { ctx, w, h } = setupCanvas(cv);
+  ctx.clearRect(0, 0, w, h);
+  gridLines(ctx, w, h);
+  const order = ["human", "tool", "known", "shadow", "signed"];
+  const totals = rateBuckets.map((b) => order.reduce((s, k) => s + b[k], 0));
+  const max = Math.max(4, ...totals);
+  const bw = w / BUCKETS;
+  const pad = 14;
+  rateBuckets.forEach((b, i) => {
+    let y = h - pad;
+    for (const k of order) {
+      const v = (b[k] / max) * (h - pad - 8);
+      if (v > 0) {
+        ctx.fillStyle = KIND_COLORS[k];
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(i * bw, y - v, Math.max(bw - 1.5, 1), v);
+        ctx.globalAlpha = 1;
+        y -= v;
+      }
+    }
+  });
+  ctx.font = "10px monospace";
+  ctx.fillStyle = "#4b5470";
+  ctx.fillText("10 min ago", 4, h - 3);
+  const nowLbl = liveMode ? "now · LIVE" : "now · SIM";
+  const tw = ctx.measureText(nowLbl).width;
+  ctx.fillStyle = liveMode ? "#3dff9e" : "#ffc94d";
+  ctx.fillText(nowLbl, w - tw - 4, h - 3);
+  ctx.fillStyle = "#7c87a8";
+  const peak = max + " req peak";
+  ctx.fillText(peak, w - ctx.measureText(peak).width - 4, 11);
+}
+
+/* shadow-burst detector — fires at 8/60 s, clears below 4 (hysteresis) */
+function checkBurst() {
+  const el = $("#alert-banner");
+  if (!el) return;
+  const now = Date.now();
+  shadowTimes = shadowTimes.filter((t) => now - t < BURST_WINDOW_MS);
+  if (shadowTimes.length >= BURST_THRESHOLD) {
+    el.hidden = false;
+    const txt = $("#alert-text");
+    if (txt) txt.textContent = `Shadow burst — ${shadowTimes.length} stealth requests in the last 60 s`;
+  } else if (shadowTimes.length < 4) {
+    el.hidden = true;
+  }
+}
+setInterval(checkBurst, 3000);
+
+/* controls: kind filter, pause, JSON export */
+$$("#ev-filters .chip[data-filter]").forEach((c) => {
+  c.addEventListener("click", () => {
+    evFilter = c.dataset.filter;
+    $$("#ev-filters .chip[data-filter]").forEach((x) => x.classList.toggle("active", x === c));
+    renderEventList();
+  });
+});
+const pauseBtn = $("#ev-pause");
+if (pauseBtn) pauseBtn.addEventListener("click", () => {
+  evPaused = !evPaused;
+  pauseBtn.textContent = evPaused ? "▶ Resume" : "⏸ Pause";
+  pauseBtn.classList.toggle("paused", evPaused);
+});
+const exportBtn = $("#ev-export");
+if (exportBtn) exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(eventLog, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "aegis-events-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "") + ".json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+
+/* simulator feed — the table and rate chart stay populated in SIM mode */
+const SIM_EVENT_AGENTS = {
+  signed: ["Operator (OpenAI)", "Gemini-Search (Google)", "Claude-Web (Anthropic)", "Comet (Perplexity)"],
+  known: ["GPTBot", "ClaudeBot", "PerplexityBot", "Google-Extended", "CCBot", "Bytespider", "bingbot"],
+  shadow: ["Headless Chrome (patched-engine)", "browser claim, no client hints", "no user-agent", "automation framework"],
+  tool: ["scripted client (curl)", "scripted client (python-requests)"],
+  human: ["browser (Chrome)", "browser (Safari)", "browser (Firefox)"],
+};
+const SIM_EVENT_PATHS = ["/", "/index.html", "/pricing", "/docs/quickstart", "/api/v1/catalog/search", "/products/88213", "/.well-known/robot.txt", "/blog/agent-economy", "/robots.txt"];
+function simEvent() {
+  const r = Math.random();
+  const kind = r < 0.25 ? "known" : r < 0.55 ? "human" : r < 0.7 ? "shadow" : r < 0.85 ? "tool" : "signed";
+  const sig = kind === "signed" ? (Math.random() < 0.7 ? "valid" : Math.random() < 0.6 ? "invalid" : "unresolved") : null;
+  pushEvent({
+    t: Date.now(),
+    kind,
+    method: Math.random() < 0.08 ? "POST" : "GET",
+    path: pick(SIM_EVENT_PATHS),
+    agent: pick(SIM_EVENT_AGENTS[kind]),
+    status: kind === "shadow" && Math.random() < 0.25 ? 403 : 200,
+    ms: rndi(7, 180),
+    sig,
+    source: "sim",
+  });
+}
+setInterval(() => { if (!liveMode) simEvent(); }, 1600);
+setInterval(drawRate, 2000);
+for (let i = 0; i < 14; i++) simEvent(); // seed the stream on first paint
+requestAnimationFrame(drawRate);
+
 /* ═══════════════ Real capture feed (SSE) ═══════════════
    Connects to the capture server's /events stream. When attached:
      - entry / detection / header panels show REAL classified requests
@@ -764,8 +969,9 @@ const SIM_TAGGED = [
   "#citation-bars", "#chart-cep",
   "#mcp-body", "#chart-revenue", "#pub-body",
   "#ipi-bars", "#ipi-body", "#gate-blocked",
+  "#ev-body", "#chart-rate",
 ];
-const LIVE_TAGGED = ["#verify-log", "#hdr-block", "#shadow-body"];
+const LIVE_TAGGED = ["#verify-log", "#hdr-block", "#shadow-body", "#ev-body", "#chart-rate"];
 
 function feedTag(el, label) {
   if (!el || !el.closest) return;
@@ -801,6 +1007,8 @@ function applySourceState() {
   SIM_TAGGED.forEach((s) => { const el = $(s); if (el) feedTag(el, "SIM"); });
   LIVE_TAGGED.forEach((s) => { const el = $(s); if (el) feedTag(el, liveMode ? "LIVE" : "SIM"); });
   if (!liveMode) setPill("Simulated Feed", "sim");
+  const at = $("#alert-tag");
+  if (at) at.textContent = liveMode ? "LIVE" : "SIM";
 }
 
 function markLabelsLive() {
@@ -819,12 +1027,15 @@ function markLabelsLive() {
     const l = lab(sel);
     if (l && !l.textContent.includes("· SIM")) l.textContent += " · SIM";
   });
-  // JWKS stats inside the LIVE verification panel are sim leftovers — mark them
-  ["#jwks-n", "#jwks-ok", "#jwks-bad"].forEach((sel) => {
+  // verification-panel counters become real in live mode — rename honestly
+  const jwksLabel = (sel, txt) => {
     const el = $(sel);
     const l = el && el.parentElement && el.parentElement.querySelector(".l");
-    if (l && !l.textContent.includes("· SIM")) l.textContent += " · SIM";
-  });
+    if (l) l.textContent = txt;
+  };
+  jwksLabel("#jwks-n", "Signed attempts · live");
+  jwksLabel("#jwks-ok", "Verified ✓ · live");
+  jwksLabel("#jwks-bad", "Rejected ✗ · live");
 }
 
 function enterLiveMode() {
@@ -832,8 +1043,29 @@ function enterLiveMode() {
   markLabelsLive();
   const sb = $("#shadow-body");
   if (sb) sb.innerHTML = "";
+  // hand the event stream over to real data
+  eventLog = [];
+  evTotal = 0;
+  shadowTimes = [];
+  rateBuckets.length = 0;
+  evPaused = false;
+  evFilter = "all";
+  const eb = $("#ev-body");
+  if (eb) eb.innerHTML = "";
+  $$("#ev-filters .chip").forEach((c) => c.classList.toggle("active", c.dataset.filter === "all"));
+  const pb = $("#ev-pause");
+  if (pb) { pb.textContent = "⏸ Pause"; pb.classList.remove("paused"); }
+  updateEvCount();
+  checkBurst();
   const log = $("#verify-log");
   if (log) log.textContent = `[${nowStamp()}] live capture attached · awaiting classified request…`;
+  // clear the simulator's placeholder header block — nothing here is real yet
+  const hb = $("#hdr-block");
+  if (hb) hb.innerHTML = '<span class="dim">awaiting classified request…</span>';
+  const ha = $("#hdr-agent");
+  if (ha) ha.textContent = "—";
+  const hv = $("#hdr-verdict");
+  if (hv) { hv.textContent = "—"; hv.className = "badge info"; }
   hops.forEach((h) => h.classList.remove("active"));
   verifyState.textContent = "WAITING";
   verifyState.className = "badge info";
@@ -851,6 +1083,19 @@ function renderRealHeaders(ev) {
   lines.push(`<span class="k">signature-input:</span> ${h["signature-input"] ? '<span class="v">' + escHtml(h["signature-input"]) + "</span>" : '<span class="badv">(absent)</span>'}`);
   lines.push(`<span class="k">signature:</span> ${h["signature"] ? '<span class="v">:' + escHtml(h["signature"]) + "…</span>" : '<span class="badv">(absent)</span>'}`);
   lines.push(`<span class="k">signature-agent:</span> ${h["signature-agent"] ? '<span class="v">' + escHtml(h["signature-agent"]) + "</span>" : '<span class="badv">(absent)</span>'}`);
+  const vb = $("#hdr-verdict");
+  if (ev.signed && ev.signed.present && ev.signed.verdict && ev.signed.verdict !== "none") {
+    const v = ev.signed.verdict;
+    const vcls = v === "valid" ? "v" : v === "invalid" ? "badv" : "warnv";
+    lines.push(`<span class="k">verdict:</span> <span class="${vcls}">${v.toUpperCase()} — ${escHtml(ev.signed.reason || "")}${ev.signed.keyid ? " · kid=" + escHtml(ev.signed.keyid) : ""}${ev.signed.alg ? " · " + escHtml(ev.signed.alg) : ""}</span>`);
+    if (vb) {
+      vb.textContent = v === "valid" ? "SIG VALID ✓" : v === "invalid" ? "SIG INVALID ✗" : "KEY PENDING ?";
+      vb.className = "badge " + (v === "valid" ? "ok" : v === "invalid" ? "bad" : "warn");
+    }
+  } else if (vb) {
+    vb.textContent = "UNSIGNED";
+    vb.className = "badge info";
+  }
   if (ev.shadow) lines.push(`<span class="k">detection:</span> <span class="badv">${escHtml(ev.shadow.signal)} · ${ev.shadow.conf}%</span>`);
   lines.push(`<span class="k">classification:</span> <span class="v">${ev.kind.toUpperCase()} → ${escHtml(ev.agent.name)}${ev.agent.op ? " (" + escHtml(ev.agent.op) + ")" : ""}</span>`);
   $("#hdr-block").innerHTML = lines.join("\n");
@@ -865,28 +1110,55 @@ async function driveVerify(ev) {
       verifyState.textContent = "VERIFYING…";
       verifyState.className = "badge info";
       const si = ev.signed.input || "";
+      const verdict = ev.signed.verdict && ev.signed.verdict !== "none" ? ev.signed.verdict : null;
+      const alg = ev.signed.alg || "algorithm unresolved";
+      const kid = ev.signed.keyid || "(no keyid)";
+      const reason = ev.signed.reason || "";
       const hasTag = /tag="web-bot-auth"/.test(si);
       const mC = /created=(\d+)/.exec(si);
       const mE = /expires=(\d+)/.exec(si);
       const nowS = Math.floor(Date.now() / 1000);
       const windowOk = !!(mC && mE && nowS >= Number(mC[1]) - 120 && nowS <= Number(mE[1]) + 120);
-      const steps = [
-        `parsing Signature-Input (${si.length} bytes), components: ${/:[a-z]/i.test(si) ? "method/authority/path" : "custom"}`,
-        `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
-        "JWKS fetch … SKIPPED — offline capture mode (no outbound requests)",
-        `Content-Digest: ${ev.headers && ev.headers["content-digest"] ? "present ✓" : "absent — not covered"}`,
-        "Ed25519 verify … PENDING (requires operator key material)",
-        `local checks → tag=${hasTag ? "web-bot-auth ✓" : "MISSING"} · created/expires ${windowOk ? "within ±120s ✓" : "STALE/ABSENT"}`,
-      ];
+      const steps = verdict
+        ? [
+            `parsing Signature-Input (${si.length} bytes), ${(si.match(/"/g) || []).length / 2 | 0} covered components`,
+            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `local keyring lookup → kid=${kid}${verdict === "unresolved" ? " — NOT FOUND" : " ✓"}`,
+            `coverage + freshness → ${/coverage|expired|future|missing/i.test(reason) ? "POLICY FAIL" : "within policy ✓"}`,
+            `${alg} verify … ${verdict === "valid" ? "OK ✓" : verdict === "invalid" ? "FAILED ✗" : "SKIPPED — key material unavailable"}`,
+            `trust decision → ${verdict.toUpperCase()}`,
+          ]
+        : [
+            `parsing Signature-Input (${si.length} bytes), components: ${/[:@][a-z]/i.test(si) ? "method/authority/path" : "custom"}`,
+            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            "local keyring lookup … no verdict attached to this event",
+            `Content-Digest: ${ev.headers && ev.headers["content-digest"] ? "present ✓" : "absent — not covered"}`,
+            "cryptographic verify … UNAVAILABLE (event predates the verifier)",
+            `local checks → tag=${hasTag ? "web-bot-auth ✓" : "MISSING"} · created/expires ${windowOk ? "within ±120s ✓" : "STALE/ABSENT"}`,
+          ];
       for (let i = 0; i < hops.length; i++) {
         hops.forEach((h, j) => h.classList.toggle("active", j <= i));
         $("#verify-log").textContent = `[${nowStamp()}] hop ${i + 1}/6 · ${steps[i]}`;
         await new Promise((r) => setTimeout(r, 170));
       }
-      const ok = hasTag && windowOk;
-      verifyState.textContent = ok ? "HEADERS OK · KEYS PENDING" : "HEADER CHECK FAILED";
-      verifyState.className = "badge " + (ok ? "info" : "bad");
-      $("#verify-log").textContent = `[${nowStamp()}] ${ok ? "✓ structure + freshness validated locally; cryptographic verification requires the operator JWKS (not fetched offline)" : "✗ tag/freshness check failed → rejected"}`;
+      if (verdict === "valid") {
+        verifyState.textContent = "SIGNATURE VALID ✓";
+        verifyState.className = "badge ok";
+        $("#verify-log").textContent = `[${nowStamp()}] ✓ ${reason} · kid=${kid}${ev.signed.label ? " · label=" + escHtml(ev.signed.label) : ""}`;
+      } else if (verdict === "invalid") {
+        verifyState.textContent = "SIGNATURE INVALID ✗";
+        verifyState.className = "badge bad";
+        $("#verify-log").textContent = `[${nowStamp()}] ✗ ${escHtml(reason)} → rejected at the edge`;
+      } else if (verdict === "unresolved") {
+        verifyState.textContent = "KEY NOT FOUND ?";
+        verifyState.className = "badge warn";
+        $("#verify-log").textContent = `[${nowStamp()}] ? ${escHtml(reason)} → held as unverified (never counted as trusted)`;
+      } else {
+        const ok = hasTag && windowOk;
+        verifyState.textContent = ok ? "HEADERS OK · KEYS PENDING" : "HEADER CHECK FAILED";
+        verifyState.className = "badge " + (ok ? "info" : "bad");
+        $("#verify-log").textContent = `[${nowStamp()}] ${ok ? "✓ structure + freshness validated locally; no cryptographic verdict on this event" : "✗ tag/freshness check failed → rejected"}`;
+      }
     } else if (ev.kind === "shadow") {
       verifyState.textContent = "REJECTED → BIOMETRICS";
       verifyState.className = "badge bad";
@@ -937,6 +1209,10 @@ function addShadowRowReal(ev) {
 
 function applySnapshot(s) {
   live.since = s.since;
+  const bv = s.byVerdict || {};
+  live.valid = bv.valid || 0;
+  live.invalid = bv.invalid || 0;
+  live.unresolved = bv.unresolved || 0;
   live.total = s.total || 0;
   const bk = s.byKind || {};
   live.signed = bk.signed || 0;
@@ -953,6 +1229,20 @@ function ingestReal(ev) {
   if (!liveMode) { liveMode = true; enterLiveMode(); }
   live.total += 1;
   live[ev.kind] = (live[ev.kind] || 0) + 1;
+  if (ev.signed && ev.signed.verdict && Object.prototype.hasOwnProperty.call(live, ev.signed.verdict)) {
+    live[ev.signed.verdict] += 1;
+  }
+  pushEvent({
+    t: ev.t || Date.now(),
+    kind: ev.kind,
+    method: ev.method || "GET",
+    path: ev.path || "/",
+    agent: (ev.agent && ev.agent.name) || ev.ua || "—",
+    status: ev.status || 200,
+    ms: Math.round(ev.ms || 0),
+    sig: ev.signed && ev.signed.present ? ev.signed.verdict || "unresolved" : null,
+    source: ev.source || "http",
+  });
   renderKpis();
   setPill(`Live Capture · ${live.total} events`, "live");
   renderRealHeaders(ev);
