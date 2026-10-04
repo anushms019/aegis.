@@ -4,6 +4,10 @@
 .server-out.log
 .shot-server.log
 
+# generated demo key material (ephemeral, never commit keys)
+.demo-jwks.json
+.demo-key*.json
+
 # dependencies
 node_modules/
 
