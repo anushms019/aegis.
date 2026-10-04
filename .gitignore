@@ -1,0 +1,16 @@
+# runtime artifacts
+*.log
+.capture-tail.log
+.server-out.log
+.shot-server.log
+
+# dependencies
+node_modules/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+
+# workspace metadata
+.freebuff/
