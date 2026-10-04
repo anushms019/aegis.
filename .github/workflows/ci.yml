@@ -21,8 +21,11 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Syntax check
+        run: node --check server.js && node --check app.js && node --check build.js
+
       - name: Run test suite
-        run: node --test tests/server.test.js tests/build.test.js
+        run: node --test tests/server.test.js tests/verify.test.js tests/integration.test.js tests/build.test.js
 
       - name: Verify index.html is in sync with sources
         run: |

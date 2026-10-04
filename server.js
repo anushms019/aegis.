@@ -20,6 +20,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("node:crypto");
 
 const PORT = Number(process.env.PORT) || 8788;
 const HOST = "127.0.0.1";
@@ -115,15 +116,363 @@ function classify(req, source = "http") {
   return { kind: "human", agent: { name: "browser", op: "human" }, signed: { present: false }, headers: headersOut, shadow: null };
 }
 
+/* ── RFC 9421 HTTP Message Signatures — real verification ─────────────
+   Parses Signature-Input / Signature (structured fields), rebuilds the
+   signature base exactly as RFC 9421 §2.5 defines it, and verifies it
+   against locally loaded JWK keys (JWKS_PATH file or addVerificationKey).
+   No outbound fetches: keyid URLs are never dereferenced — that would be
+   an SSRF primitive (see SECURITY.md). Key resolution is explicit. */
+
+// Components a signature must cover for AEGIS to trust it (Web Bot Auth profile).
+const REQUIRED_COMPONENTS = ["@method", "@path", "@authority"];
+const TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+/;
+
+/* Parse an sf-Dictionary of Signature-Input into
+   [{ label, input, components:[{name, params}], params }] or null. */
+function parseSignatureInput(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const entries = [];
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /[\s,]/.test(s[i])) i++;
+    if (i >= s.length) break;
+    const lm = TOKEN_RE.exec(s.slice(i));
+    if (!lm) return null;
+    const label = lm[0];
+    i += label.length;
+    if (s[i] !== "=") return null;
+    i++;
+    if (s[i] !== "(") return null;
+    // balanced, quote-aware scan of the inner list
+    const valueStart = i;
+    let depth = 0, j = i, inQ = false;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (inQ) { if (c === "\\") { j++; continue; } if (c === '"') inQ = false; continue; }
+      if (c === '"') { inQ = true; continue; }
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth === 0) break; }
+    }
+    if (depth !== 0 || j >= s.length) return null;
+    const inner = s.slice(valueStart + 1, j);
+    i = j + 1;
+    // signature parameters run to the next top-level comma (quote-aware)
+    let pe = i, pq = false;
+    while (pe < s.length) {
+      const c = s[pe];
+      if (pq) { if (c === "\\") { pe += 2; continue; } if (c === '"') pq = false; }
+      else if (c === '"') pq = true;
+      else if (c === ",") break;
+      pe++;
+    }
+    const input = s.slice(valueStart, pe); // exact string for @signature-params
+    const paramsStr = s.slice(i, pe).replace(/^;/, "");
+    i = pe + 1;
+    // inner-list members: ("comp" "comp";param=x comp2)
+    const components = [];
+    let k = 0;
+    while (k < inner.length) {
+      while (k < inner.length && /\s/.test(inner[k])) k++;
+      if (k >= inner.length) break;
+      let name = "";
+      if (inner[k] === '"') {
+        k++;
+        while (k < inner.length && inner[k] !== '"') { if (inner[k] === "\\") k++; name += inner[k]; k++; }
+        k++;
+      } else {
+        // lenient: accept bare token names, including legacy ":method" / "@method" forms
+        const m = /^[!#$%&'*+.^_`|~0-9A-Za-z:@-]+/.exec(inner.slice(k));
+        if (!m) return null;
+        name = m[0];
+        k += m[0].length;
+      }
+      let params = "";
+      while (k < inner.length && inner[k] === ";") {
+        const ps = k;
+        k++;
+        while (k < inner.length && !/[\s;=]/.test(inner[k])) k++;
+        if (k < inner.length && inner[k] === "=") {
+          k++;
+          if (k < inner.length && inner[k] === '"') {
+            k++;
+            while (k < inner.length && inner[k] !== '"') { if (inner[k] === "\\") k++; k++; }
+            k++;
+          } else {
+            while (k < inner.length && !/\s/.test(inner[k]) && inner[k] !== ";") k++;
+          }
+        }
+        params += inner.slice(ps, k);
+      }
+      if (name) components.push({ name, params });
+    }
+    if (!components.length) return null;
+    // top-level parameters → object (string params unquoted, like keyid)
+    const params = {};
+    let p = paramsStr, pi = 0;
+    while (pi < p.length) {
+      const eq = p.indexOf("=", pi);
+      if (eq === -1) break;
+      const key = p.slice(pi, eq).replace(/^;+/, "").trim();
+      let v, q = eq + 1;
+      if (p[q] === '"') {
+        let out = ""; q++;
+        while (q < p.length && p[q] !== '"') { if (p[q] === "\\") { q++; continue; } out += p[q]; q++; }
+        q++;
+        v = out;
+      } else {
+        let out = "";
+        while (q < p.length && p[q] !== ";") { out += p[q]; q++; }
+        v = out.trim();
+      }
+      if (key) params[key] = v;
+      while (q < p.length && p[q] !== ";") q++;
+      pi = q + 1;
+    }
+    entries.push({ label, input, components, params });
+  }
+  return entries.length ? entries : null;
+}
+
+/* Parse an sf-Dictionary of Signature byte sequences → { label: base64 }. */
+function parseSignatureHeader(raw) {
+  const out = {};
+  const s = String(raw || "");
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /[\s,]/.test(s[i])) i++;
+    if (i >= s.length) break;
+    const lm = TOKEN_RE.exec(s.slice(i));
+    if (!lm) break;
+    const label = lm[0];
+    i += label.length;
+    if (s[i] !== "=") { while (i < s.length && s[i] !== ",") i++; continue; }
+    i++;
+    if (s[i] !== ":") { while (i < s.length && s[i] !== ",") i++; continue; }
+    i++;
+    if (s[i] === '"') i++; // tolerate a quoted byte sequence
+    let b64 = "";
+    while (i < s.length && s[i] !== '"' && s[i] !== ":" && s[i] !== ",") { b64 += s[i]; i++; }
+    if (s[i] === '"') i++;
+    if (s[i] === ":") i++;
+    out[label] = b64;
+    while (i < s.length && s[i] !== ",") i++;
+    i++;
+  }
+  return out;
+}
+
+/* Rebuild the signature base for one label (RFC 9421 §2.5):
+   "component": value\n … \n"@signature-params": <input>            */
+function signatureBase(req, entry) {
+  const raw = String(req.url || "");
+  const qi = raw.indexOf("?");
+  const pth = qi === -1 ? raw : raw.slice(0, qi);
+  const qry = qi === -1 ? "" : raw.slice(qi + 1);
+  const headers = req.headers || {};
+  const lines = [];
+  const seen = new Set();
+  for (const comp of entry.components) {
+    if (seen.has(comp.name)) return { error: `duplicate component "${comp.name}"` };
+    seen.add(comp.name);
+    const n = comp.name;
+    const d = n.startsWith(":") ? "@" + n.slice(1) : n; // legacy ":method" form → "@method"
+    if (comp.params) {
+      const allowed = /^(;sf|;bs|;req|;tr)(?=;|$)/;
+      if (!allowed.test(comp.params)) return { error: `unsupported component parameters ${comp.params} on "${n}"` };
+      if (/;req/.test(comp.params)) return { error: `req parameter invalid on a request message ("${n}")` };
+      return { error: `component parameter ${comp.params} is not implemented ("${n}")` };
+    }
+    let value;
+    if (d === "@method") value = String(req.method || "GET");
+    else if (d === "@path") value = pth;
+    else if (d === "@query") value = qry;
+    else if (d === "@request-target") value = raw;
+    else if (d === "@authority") {
+      value = String(headers.host || "").toLowerCase().replace(/:(80|443)$/, "");
+    } else if (d.startsWith("@")) return { error: `unsupported derived component ${d}` };
+    else {
+      const v = headers[n.toLowerCase()];
+      if (v === undefined) return { error: `covered field "${n}" not present on the request` };
+      value = (Array.isArray(v) ? v.join(", ") : String(v)).trim();
+    }
+    lines.push(`"${n}": ${value}`);
+  }
+  lines.push(`"@signature-params": ${entry.input}`);
+  return { base: lines.join("\n") };
+}
+
+/* ── local keyring ───────────────────────────────────────── */
+const verificationKeys = new Map(); // kid → { key: KeyObject, jwk }
+
+function addVerificationKey(jwk) {
+  if (!jwk || !jwk.kid) throw new Error("JWK must include a kid");
+  let key;
+  if (jwk.kty === "oct") {
+    if (!jwk.k) throw new Error("oct JWK must include k");
+    key = crypto.createSecretKey(Buffer.from(jwk.k, "base64url"));
+  } else {
+    key = crypto.createPublicKey({ key: jwk, format: "jwk" });
+  }
+  verificationKeys.set(String(jwk.kid), { key, jwk });
+  return true;
+}
+
+function loadJwksFile(file) {
+  const doc = JSON.parse(fs.readFileSync(file, "utf8"));
+  const keys = Array.isArray(doc) ? doc : doc.keys || [];
+  let n = 0;
+  for (const jwk of keys) { try { addVerificationKey(jwk); n++; } catch (_) { /* skip unusable key */ } }
+  return n;
+}
+
+let jwksMtime = -1;
+/* Reload JWKS_PATH when the file changes (mtime-gated so a half-written
+   file is retried rather than latched). Called on signed traffic only. */
+function ensureJwksFresh() {
+  const file = process.env.JWKS_PATH;
+  if (!file) return verificationKeys.size;
+  try {
+    const st = fs.statSync(file);
+    if (st.mtimeMs === jwksMtime) return verificationKeys.size;
+    const n = loadJwksFile(file);
+    jwksMtime = st.mtimeMs;
+    return n;
+  } catch (_) {
+    return verificationKeys.size;
+  }
+}
+
+/* Algorithm registry (RFC 9421 §6.2.2 + JOSE aliases for interop). */
+const HTTP_SIG_ALGS = {
+  "ed25519":           { type: "ed" },
+  "EdDSA":             { type: "ed" },
+  "eddsa":             { type: "ed" },
+  "rsa-pss-sha512":    { type: "rsa-pss", hash: "sha512", salt: 64 },
+  "rsa-pss-sha384":    { type: "rsa-pss", hash: "sha384", salt: 48 },
+  "rsa-pss-sha256":    { type: "rsa-pss", hash: "sha256", salt: 32 },
+  "PS512":             { type: "rsa-pss", hash: "sha512", salt: 64 },
+  "PS384":             { type: "rsa-pss", hash: "sha384", salt: 48 },
+  "PS256":             { type: "rsa-pss", hash: "sha256", salt: 32 },
+  "rsa-v1_5-sha256":   { type: "rsa-pkcs1", hash: "sha256" },
+  "RS256":             { type: "rsa-pkcs1", hash: "sha256" },
+  "hmac-sha256":       { type: "hmac", hash: "sha256" },
+  "HS256":             { type: "hmac", hash: "sha256" },
+  "ecdsa-p256-sha256": { type: "ecdsa", hash: "sha256" },
+  "ecdsa-p384-sha384": { type: "ecdsa", hash: "sha384" },
+  "ES256":             { type: "ecdsa", hash: "sha256" },
+  "ES384":             { type: "ecdsa", hash: "sha384" },
+};
+
+function algCandidates(paramAlg, jwk) {
+  if (paramAlg) return HTTP_SIG_ALGS[paramAlg] ? [paramAlg] : [];
+  if (jwk.alg && HTTP_SIG_ALGS[jwk.alg]) return [jwk.alg];
+  if (jwk.kty === "OKP" && jwk.crv === "Ed25519") return ["ed25519"];
+  if (jwk.kty === "RSA") return ["rsa-pss-sha512", "rsa-pss-sha256", "rsa-v1_5-sha256"];
+  if (jwk.kty === "EC" && jwk.crv === "P-256") return ["ecdsa-p256-sha256"];
+  if (jwk.kty === "EC" && jwk.crv === "P-384") return ["ecdsa-p384-sha384"];
+  if (jwk.kty === "oct") return ["hmac-sha256"];
+  return [];
+}
+
+function verifyOne(algName, rec, base, sig) {
+  const spec = HTTP_SIG_ALGS[algName];
+  if (!spec) return null;
+  const data = Buffer.from(base, "utf8");
+  try {
+    if (spec.type === "ed") return crypto.verify(null, data, rec.key, sig);
+    if (spec.type === "rsa-pss")
+      return crypto.verify(spec.hash, data, { key: rec.key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: spec.salt }, sig);
+    if (spec.type === "rsa-pkcs1")
+      return crypto.verify(spec.hash, data, { key: rec.key, padding: crypto.constants.RSA_PKCS1_PADDING }, sig);
+    if (spec.type === "ecdsa")
+      return crypto.verify(spec.hash, data, { key: rec.key, dsaEncoding: "ieee-p1363" }, sig);
+    if (spec.type === "hmac") {
+      const mac = crypto.createHmac(spec.hash, rec.key).update(data).digest();
+      return mac.length === sig.length && crypto.timingSafeEqual(mac, sig);
+    }
+  } catch (_) {
+    return false;
+  }
+  return null;
+}
+
+/* Full verdict for a request carrying Signature + Signature-Input.
+   verdict: "valid" | "invalid" | "unresolved" (key or alg not available). */
+function verifySignedRequest(req) {
+  const rawIn = req.headers["signature-input"];
+  const rawSig = req.headers["signature"];
+  if (!rawIn || !rawSig) return { present: false, verdict: "none", reason: "signature headers absent" };
+  ensureJwksFresh();
+  const entries = parseSignatureInput(rawIn);
+  if (!entries) return { present: true, verdict: "invalid", reason: "unparseable Signature-Input" };
+  const sigs = parseSignatureHeader(rawSig);
+  let firstInvalid = null, firstUnresolved = null;
+  const bad = (reason) => { if (!firstInvalid) firstInvalid = { reason }; };
+  const pend = (reason) => { if (!firstUnresolved) firstUnresolved = { reason }; };
+
+  for (const entry of entries) {
+    const b64 = sigs[entry.label];
+    if (b64 === undefined) { bad(`no signature bytes for label "${entry.label}"`); continue; }
+    if (!/^[A-Za-z0-9+/=_-]*$/.test(b64)) { bad("signature bytes are not valid base64"); continue; }
+    const sig = Buffer.from(b64, "base64");
+    if (!sig.length) { bad("signature bytes are empty"); continue; }
+    const covered = new Set(entry.components.map((c) => (c.name.startsWith(":") ? "@" + c.name.slice(1) : c.name)));
+    const missing = REQUIRED_COMPONENTS.filter((rc) => !covered.has(rc));
+    if (missing.length) { bad(`insufficient coverage — missing ${missing.join(" ")}`); continue; }
+    const nowS = Math.floor(Date.now() / 1000);
+    const created = entry.params.created !== undefined ? Number(entry.params.created) : null;
+    const expires = entry.params.expires !== undefined ? Number(entry.params.expires) : null;
+    if (created !== null && !Number.isFinite(created)) { bad("malformed created parameter"); continue; }
+    if (expires !== null && !Number.isFinite(expires)) { bad("malformed expires parameter"); continue; }
+    if (expires !== null && nowS > expires + 120) { bad("signature expired (outside the ±120 s freshness window)"); continue; }
+    if (created !== null && nowS < created - 120) { bad("signature created in the future (outside the ±120 s freshness window)"); continue; }
+    const baseRes = signatureBase(req, entry);
+    if (baseRes.error) { bad(baseRes.error); continue; }
+    const kid = entry.params.keyid;
+    const rec = kid ? verificationKeys.get(kid) : null;
+    if (!rec) {
+      pend(kid ? `key "${kid}" not in the local keyring (set JWKS_PATH or add keys)` : "no keyid parameter and no key registered");
+      continue;
+    }
+    const cands = algCandidates(entry.params.alg, rec.jwk);
+    if (!cands.length) { pend(`unsupported algorithm "${entry.params.alg}"`); continue; }
+    let ok = false, sawUnsupported = false;
+    for (const alg of cands) {
+      const r = verifyOne(alg, rec, baseRes.base, sig);
+      if (r === null) { sawUnsupported = true; continue; }
+      if (r === true) {
+        return { present: true, verdict: "valid", reason: `${alg} signature verified over RFC 9421 base`, label: entry.label, keyid: kid || null, alg };
+      }
+    }
+    if (sawUnsupported && cands.length === 1) pend(`unsupported algorithm "${cands[0]}"`);
+    else bad(`signature check failed (${cands.join(" / ")})`);
+  }
+  if (firstInvalid) return { present: true, verdict: "invalid", reason: firstInvalid.reason };
+  if (firstUnresolved) return { present: true, verdict: "unresolved", reason: firstUnresolved.reason };
+  return { present: true, verdict: "invalid", reason: "nothing verifiable in Signature-Input" };
+}
+
 /* ── counters ───────────────────────────────────────────── */
 const counters = {
   since: Date.now(),
   total: 0,
   byKind: { signed: 0, known: 0, shadow: 0, tool: 0, human: 0 },
+  byVerdict: { valid: 0, invalid: 0, unresolved: 0 },
   byAgent: {},
   byPath: {},
   recent: [], // timestamps for rate
 };
+
+function resetCounters() {
+  counters.since = Date.now();
+  counters.total = 0;
+  counters.byKind = { signed: 0, known: 0, shadow: 0, tool: 0, human: 0 };
+  counters.byVerdict = { valid: 0, invalid: 0, unresolved: 0 };
+  counters.byAgent = {};
+  counters.byPath = {};
+  counters.recent = [];
+}
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
 function eventsPerMin() {
   const cutoff = Date.now() - 60000;
@@ -137,6 +486,7 @@ function snapshot() {
     since: counters.since,
     total: counters.total,
     byKind: { ...counters.byKind },
+    byVerdict: { ...counters.byVerdict },
     byAgent: Object.fromEntries(topAgents),
     topAgents,
     byPath: { ...counters.byPath },
@@ -157,6 +507,7 @@ function emit(ev) {
   counters.total++;
   counters.recent.push(ev.t);
   bump(counters.byKind, ev.kind);
+  if (ev.signed && ev.signed.verdict && ev.signed.verdict !== "none") bump(counters.byVerdict, ev.signed.verdict);
   if (ev.kind === "known" || ev.kind === "signed") bump(counters.byAgent, ev.agent.name);
   bump(counters.byPath, ev.path);
   broadcast(ev);
@@ -164,6 +515,9 @@ function emit(ev) {
 
 function makeEvent(req, status, ms) {
   const cls = classify(req);
+  const signed = cls.signed.present
+    ? { ...cls.signed, ...verifySignedRequest(req), present: true }
+    : cls.signed;
   const url = new URL(req.url, "http://local");
   return {
     t: Date.now(),
@@ -178,7 +532,7 @@ function makeEvent(req, status, ms) {
     ref: req.headers.referer || req.headers.referrer || null,
     kind: cls.kind,
     agent: cls.agent,
-    signed: cls.signed,
+    signed,
     shadow: cls.shadow,
     headers: cls.headers,
   };
@@ -286,6 +640,7 @@ function parseLogLine(line) {
           "accept-language": j.lang || j["accept-language"],
           "sec-ch-ua": j["sec-ch-ua"],
           "sec-fetch-mode": j["sec-fetch-mode"],
+          host: j.host || j.authority || undefined,
           referer: j.ref || j.referer,
         },
         socket: { remoteAddress: j.ip || j.remote_addr || "-" },
@@ -294,6 +649,9 @@ function parseLogLine(line) {
         headers_: null,
       };
       const cls = classify(fakeReq, "log");
+      const signed = cls.signed.present
+        ? { ...cls.signed, ...verifySignedRequest(fakeReq), present: true }
+        : cls.signed;
       const pathname = String(j.path || j.url || "/").split("?")[0];
       return {
         t: j.t || j.ts || Date.now(),
@@ -308,7 +666,7 @@ function parseLogLine(line) {
         ref: j.ref || j.referer || null,
         kind: cls.kind,
         agent: cls.agent,
-        signed: cls.signed,
+        signed,
         shadow: cls.shadow,
         headers: cls.headers,
       };
@@ -379,6 +737,10 @@ if (require.main === module && LOG_PATH) {
 /* Only start the HTTP server / log tail when executed directly.
    Tests require() this module for its pure functions (classify, parseLogLine). */
 if (require.main === module) {
+  if (process.env.JWKS_PATH) {
+    ensureJwksFresh();
+    console.log(`[keys] JWKS keyring: ${process.env.JWKS_PATH} → ${verificationKeys.size} key(s)`);
+  }
   server.listen(PORT, HOST, () => {
     console.log(`AEGIS capture server → http://${HOST}:${PORT}`);
     console.log(`  SSE stream:   http://${HOST}:${PORT}/events`);
@@ -395,4 +757,8 @@ if (require.main === module) {
 }
 
 /* exported for the test suite */
-module.exports = { classify, parseLogLine, NGINX_RE, counters, snapshot };
+module.exports = { classify, parseLogLine,
+  NGINX_RE, counters, snapshot, resetCounters,
+  verifySignedRequest, parseSignatureInput, parseSignatureHeader,
+  signatureBase, addVerificationKey, loadJwksFile, server,
+};
