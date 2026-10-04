@@ -29,7 +29,7 @@ Edit `styles.css` / `app.js`, then regenerate:
 
 ```bash
 npm run build           # node build.js → rewrites index.html
-npm test                # verifies index.html is in sync with the sources
+npm test                # all four suites (classification, verification, integration, build sync)
 ```
 
 > **Never** rewrite `index.html` by hand with a string-based `String.replace`
@@ -47,12 +47,21 @@ npm test
   known agent UAs, shadow/headless detection, tool vs. human, and the two
   regression cases (curl must never be shadow; the browser-claim heuristic only
   applies to live sockets). Also covers nginx/JSON access-log parsing.
+- `tests/verify.test.js` — RFC 9421 signature verification: the official
+  Ed25519 vector from appendix B.2.6, Signature-Input parsing, signature-base
+  construction, legacy `:component` normalization, algorithm registry, JWKS
+  keyring handling, and the fail-closed policy (unknown `kid` → `unresolved`,
+  never `valid`).
+- `tests/integration.test.js` — spins up the real HTTP server on an ephemeral
+  port: verdict counters move on signed traffic, SSE hydrates late readers and
+  broadcasts live events. Also asserts the server makes **no outbound
+  requests** (SSRF guard).
 - `tests/build.test.js` — `index.html` is in sync with the sources, the page is
   self-contained (no external requests), honesty markers are present, and the
   server guards side effects behind `require.main`.
 
-CI runs the same suite plus a `git diff --exit-code` check on `index.html`
-across Node 20/22/24. Please make sure both pass locally before opening a PR.
+CI runs the same four suites plus a `git diff --exit-code` check on `index.html`
+across Node 20/22/24. Please make sure they all pass locally before opening a PR.
 
 ## Commit messages
 
