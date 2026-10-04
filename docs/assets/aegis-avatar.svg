@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="AEGIS logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e1220"/>
+      <stop offset="1" stop-color="#07090f"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#37e6d4"/>
+      <stop offset="1" stop-color="#4d9dff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- plate -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#bg)" stroke="url(#edge)" stroke-width="3"/>
+
+  <!-- shield -->
+  <path d="M128 44 L196 72 V132 C196 176 166 204 128 216 C90 204 60 176 60 132 V72 Z"
+        fill="none" stroke="url(#edge)" stroke-width="7" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- node graph: observation points inside the shield -->
+  <g stroke="#37e6d4" stroke-width="3" opacity="0.9">
+    <line x1="96" y1="104" x2="128" y2="86"/>
+    <line x1="128" y1="86" x2="160" y2="104"/>
+    <line x1="96" y1="104" x2="106" y2="146"/>
+    <line x1="160" y1="104" x2="150" y2="146"/>
+    <line x1="106" y1="146" x2="128" y2="176"/>
+    <line x1="150" y1="146" x2="128" y2="176"/>
+    <line x1="106" y1="146" x2="150" y2="146"/>
+  </g>
+  <g fill="#07090f" stroke="#4d9dff" stroke-width="4">
+    <circle cx="128" cy="86" r="9"/>
+    <circle cx="96" cy="104" r="7"/>
+    <circle cx="160" cy="104" r="7"/>
+    <circle cx="106" cy="146" r="7"/>
+    <circle cx="150" cy="146" r="7"/>
+  </g>
+  <circle cx="128" cy="176" r="11" fill="#37e6d4" filter="url(#glow)"/>
+</svg>
