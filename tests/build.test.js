@@ -61,3 +61,25 @@ test("server.js guards side effects behind require.main and exports its pure fun
     src.slice(src.indexOf("RFC 9421 HTTP Message Signatures"), src.indexOf("counters = {"))
   ), "verification module must not make outbound requests");
 });
+
+test("escHtml neutralizes quotes as well as angle brackets", () => {
+  // escHtml output lands inside double-quoted attributes (e.g. title="${escHtml(ev.path)}"),
+  // so a raw " in a path/UA would break out of the attribute. This regressed once already.
+  const src = read("app.js");
+  const m = src.match(/const escHtml = .*;/);
+  assert.ok(m, "escHtml definition missing");
+  const escHtml = new Function(`${m[0]}; return escHtml;`)();
+
+  for (const [input, why] of [
+    ['x" onmouseover="alert(1)', "double quote in attribute context"],
+    ["it's a path", "single quote"],
+    ["<img src=x onerror=alert(1)>", "angle brackets"],
+    ["a & b", "ampersand"],
+  ]) {
+    const out = escHtml(input);
+    assert.ok(!/["<>]/.test(out), `unsafe output for ${why}: ${out}`);
+  }
+  assert.strictEqual(escHtml('"'), "&quot;");
+  assert.strictEqual(escHtml("'"), "&#39;");
+  assert.strictEqual(escHtml(null), "—", "nullish fallback changed");
+});

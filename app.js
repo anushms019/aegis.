@@ -13,7 +13,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const fmtInt = (n) => Math.round(n).toLocaleString("en-US");
 const fmtMoney = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const nowStamp = () => new Date().toISOString().slice(11, 23);
-const escHtml = (s) => String(s ?? "—").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const escHtml = (s) => String(s ?? "—").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ─── live capture state (fed by the SSE module at the end of this file) ─── */
 let liveMode = false;      // true once a real event source is attached
