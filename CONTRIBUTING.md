@@ -12,20 +12,23 @@ cd aegis
 node server.js          # dashboard + capture server on http://127.0.0.1:8788
 ```
 
-There is nothing to install — no dependencies, no lockfile, no build tooling
-beyond `build.js`.
+There is nothing to install — no dependencies, no lockfile. `build.js` is the
+only build step.
 
 ## Making changes
 
-`index.html` is **generated**. It is the merge of two sources:
+The frontend is split into **modules under `src/`** (one file per panel /
+concern). Two files are **generated** — edit the sources, never them:
 
-| File        | Contains                                        |
-| ----------- | ----------------------------------------------- |
-| `styles.css` | theme, layout, all CSS                          |
-| `app.js`     | telemetry engine, visualizations, live capture  |
-| `build.js`   | the merge (must use function replacers — see below) |
+| File              | Contains                                          |
+| ----------------- | ------------------------------------------------- |
+| `src/*.js`        | telemetry engine, split into 16 modules           |
+| `styles.css`      | theme, layout, all CSS                            |
+| `index.html`      | markup + the inlined `<style>`/`<script>` (built)  |
+| `app.js`          | concatenated `src/*.js` (built, do not edit)       |
+| `build.js`        | bundles `src/` → `app.js` → `index.html`           |
 
-Edit `styles.css` / `app.js`, then regenerate:
+Edit `src/*.js` or `styles.css`, then regenerate:
 
 ```bash
 npm run build           # node build.js → rewrites index.html
@@ -80,7 +83,7 @@ Keep commits focused — one logical change per commit.
 
 1. One feature or fix per PR; describe the *why* in the PR body.
 2. Add or extend tests for behavior changes.
-3. Regenerate `index.html` if you touched `styles.css` or `app.js`.
+3. Regenerate `app.js` / `index.html` if you touched `src/*.js` or `styles.css`.
 4. Keep the professional, factual tone used throughout the docs: no hype,
    no claims the code does not honor.
 

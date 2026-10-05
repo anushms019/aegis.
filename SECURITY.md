@@ -20,20 +20,40 @@ Every outcome that is not a successful public-key check is untrusted:
 
 There is no "probably valid" state. The dashboard shows the exact reason string.
 
-### 2. No outbound fetches (SSRF guard)
+### 2. Outbound key fetches are default-deny (SSRF guard)
 
 RFC 9421 signatures carry a `keyid` parameter, and Web Bot Auth adds a
 `Signature-Agent` header — both can be arbitrary URLs. Dereferencing them from a
 capture server would be a server-side request forgery primitive (cloud metadata
 endpoints, internal admin panels).
 
-**AEGIS never fetches URLs from request headers.** Keys are loaded only from:
+**AEGIS never fetches a URL taken from a request header.** Keys are loaded from:
 
 - `JWKS_PATH` — a local file you control, reloaded on mtime change; or
 - `addVerificationKey(jwk)` — programmatic registration (tests, embedded use).
 
-A test in `tests/build.test.js` asserts the verification module contains no
-outbound HTTP calls, so this property cannot regress silently.
+Remote JWKS resolution exists, but it is **operator-configured, not
+request-controlled**: it runs only when you set `JWKS_ALLOWLIST`, and every
+fetch must pass all of the following or it is refused before any socket opens:
+
+| Control | Behavior |
+| --- | --- |
+| Allowlist | exact `origin` match against `JWKS_ALLOWLIST` (default: empty → deny everything) |
+| Scheme | `https:` only |
+| Host | loopback, RFC1918, link-local (incl. `169.254.169.254`), CGNAT, `.local`/`.internal` and bare IPv6 refused |
+| Redirects | `redirect: "error"` — never followed |
+| Size / time | 64 KB cap, 3 s timeout |
+| Rate | 6 fetches per origin per minute, then reuse-or-deny |
+| Cache | 10-minute TTL so keys are not re-fetched per request |
+
+The allowlist is configuration the operator writes; a remote party cannot add
+to it by sending headers. Verification itself remains synchronous — a missing
+key stays `unresolved` for that request and the keyring warms in the
+background for later ones.
+
+`tests/build.test.js` asserts the verification path is gated on
+`jwksAllowlist()` and exercises every refusal above (empty allowlist, loopback,
+`http:`, suffix-lookalike origins), so the guard cannot regress silently.
 
 ### 3. Replay resistance is bounded, and honestly labeled
 

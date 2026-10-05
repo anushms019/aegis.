@@ -112,18 +112,19 @@ npm test        # 45 tests, four suites
 | `tests/verify.test.js` | **RFC 9421 Appendix B.2.6 test vector**, signature-base policy (coverage, freshness, keyring, algorithms), parser edge cases |
 | `tests/integration.test.js` | the real HTTP server on an ephemeral port: classification, verdict counters, snapshot shape, SSE hydration + broadcast |
 | `tests/server.test.js` | classification contract (known UA matrix, shadow confidence, tool-vs-shadow regressions), nginx/JSON log parsing |
-| `tests/build.test.js` | `index.html` byte-synced to its sources, self-contained page, honesty markers, no outbound requests in the verifier |
+| `tests/build.test.js` | `index.html` byte-synced to its sources, `src/` ↔ `app.js` bundle round-trip, self-contained page, honesty markers, remote-JWKS SSRF guard (default-deny) |
 
 CI runs the suite on Node 20, 22, and 24, syntax-checks every source file, and fails if
-a committed `index.html` drifts from `styles.css` / `app.js`.
+a committed `index.html` drifts from `styles.css` / `src/*.js`.
 
 ## Project structure
 
 ```
 index.html            generated, self-contained dashboard (the deliverable)
 ├── styles.css        theme + layout source
-├── app.js            telemetry engine + live-capture module source
-└── build.js          merge step (node build.js)
+├── src/*.js          telemetry engine split into 16 modules (one per panel)
+├── app.js            generated bundle of src/*.js — do not edit
+└── build.js          bundles src/ → app.js → index.html (node build.js)
 server.js             capture server: classifier, RFC 9421 verifier, SSE, log tail
 tests/                four node:test suites (npm test)
 scripts/demo-traffic.js   signed + shadow + bot traffic generator for demos
@@ -132,8 +133,9 @@ docs/                 screenshots, logo
 SECURITY.md           threat model (SSRF guard, verdict semantics, reporting)
 ```
 
-**Editing workflow:** change `styles.css` / `app.js`, run `npm run build`, commit both
-sources and the regenerated `index.html`. CI verifies the three stay consistent.
+**Editing workflow:** change `styles.css` or a module in `src/`, run `npm run build`,
+and commit the sources together with regenerated `app.js` and `index.html`. CI
+verifies all four stay consistent.
 
 ## Honest data labeling
 
