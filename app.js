@@ -291,15 +291,33 @@ const SIGNALS = [
 function fpHash() {
   return [8, 4, 4, 4, 12].map((n) => hex(n)).join("-");
 }
+/* small DOM helpers: build cells/rows without ever parsing a string as HTML */
+function cell(text, cls, style) {
+  const td = document.createElement("td");
+  if (cls) td.className = cls;
+  if (style) td.setAttribute("style", style);
+  td.textContent = text == null ? "" : String(text);
+  return td;
+}
+function badgeCell(text, cls) {
+  const td = document.createElement("td");
+  const span = document.createElement("span");
+  span.className = "badge " + (cls || "");
+  span.textContent = String(text);
+  td.appendChild(span);
+  return td;
+}
+function row(cells) { const tr = document.createElement("tr"); cells.forEach((c) => tr.appendChild(c)); return tr; }
+
 function addShadowRow() {
   const [signal, conf] = pick(SIGNALS);
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td class="mono dim">${nowStamp().slice(0, 8)}</td>
-    <td class="mono">${fpHash()}</td>
-    <td class="dim" style="font-size:11.5px">${pick(ENGINES)}</td>
-    <td>${signal}</td>
-    <td><span class="badge ${conf > 93 ? "bad" : "warn"}">${conf}%</span></td>`;
+  const tr = row([
+    cell(nowStamp().slice(0, 8), "mono dim"),
+    cell(fpHash(), "mono"),
+    cell(pick(ENGINES), "dim", "font-size:11.5px"),
+    cell(signal),
+    badgeCell(conf + "%", conf > 93 ? "bad" : "warn"),
+  ]);
   const body = $("#shadow-body");
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
@@ -454,11 +472,27 @@ const ANOMALIES = [
 function addTrace(phase, text, alert = false) {
   const div = document.createElement("div");
   div.className = "trace-step" + (alert ? " alert" : "");
-  div.innerHTML = `
-    <div class="phase ${phase.toLowerCase()}">${phase}</div>
-    <div class="content">${text}</div>`;
+  const ph = document.createElement("div");
+  ph.className = "phase " + phase.toLowerCase();
+  ph.textContent = phase;
+  const content = document.createElement("div");
+  content.className = "content";
+  if (text && text.nodeType) content.appendChild(text);   // already a node (may hold a .kv span)
+  else content.textContent = text == null ? "" : String(text);
+  div.appendChild(ph);
+  div.appendChild(content);
   traceStream.prepend(div);
   while (traceStream.children.length > 60) traceStream.lastChild.remove();
+}
+/* trace step with a highlighted leading token, built as nodes */
+function kvNode(k, rest) {
+  const frag = document.createDocumentFragment();
+  const kv = document.createElement("span");
+  kv.className = "kv";
+  kv.textContent = k;
+  frag.appendChild(kv);
+  frag.appendChild(document.createTextNode(" " + String(rest)));
+  return frag;
 }
 
 let traceStep = 0;
@@ -471,8 +505,8 @@ function traceTick() {
   else if (phase === "ACTION") {
     const [verb, target] = pick(ACTIONS);
     if (verb === "callTool") toolCalls++;
-    addTrace(phase, `<span class="kv">${verb}</span> ${target}`);
-  } else addTrace(phase, `<span class="kv">observed:</span> ${pick(OBSERVATIONS)}`);
+    addTrace(phase, kvNode(verb, target));
+  } else addTrace(phase, kvNode("observed:", pick(OBSERVATIONS)));
 
   if (Math.random() < 0.055) {
     addTrace("ANOMALY", pick(ANOMALIES), true);
@@ -487,7 +521,7 @@ function traceTick() {
   if (tokens > 126000) {
     tokens = rndi(28000, 41000);
     compactions++;
-    addTrace("OBSERVATION", `<span class="kv">context compaction → summarized ${rndi(60, 88)}% of history · token budget reclaimed</span>`);
+    addTrace("OBSERVATION", kvNode("context compaction", `→ summarized ${rndi(60, 88)}% of history · token budget reclaimed`));
     ctxHistory.push(24);
     ctxHistory.shift();
   } else {
@@ -585,16 +619,16 @@ function addMcpRow() {
   const ok = Math.random() < 0.91;
   const lat = rndi(38, 640);
   mcpAll++; if (ok) mcpOk++;
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td class="mono dim">${nowStamp().slice(0, 8)}</td>
-    <td class="mono">${domain}</td>
-    <td style="color:var(--cyan)" class="mono">${tool}</td>
-    <td class="mono dim" style="font-size:11px">${JSON.stringify(params)}</td>
-    <td><span class="badge vio">${schema}</span></td>
-    <td><span class="badge ${ok ? "ok" : "bad"}">${ok ? "200 · structured" : "422 · schema violation"}</span></td>
-    <td class="mono">${lat} ms</td>
-    <td class="mono dim" style="font-size:11px">${ok ? JSON.stringify({ result: "…" }).slice(0, 22) : "—"}</td>`;
+  const tr = row([
+    cell(nowStamp().slice(0, 8), "mono dim"),
+    cell(domain, "mono"),
+    cell(tool, "mono", "color:var(--cyan)"),
+    cell(JSON.stringify(params), "mono dim", "font-size:11px"),
+    badgeCell(schema, "vio"),
+    badgeCell(ok ? "200 · structured" : "422 · schema violation", ok ? "ok" : "bad"),
+    cell(lat + " ms", "mono"),
+    cell(ok ? JSON.stringify({ result: "…" }).slice(0, 22) : "—", "mono dim", "font-size:11px"),
+  ]);
   const body = $("#mcp-body");
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
@@ -709,13 +743,13 @@ function addIpiRow() {
   const src = pick(IPI_SOURCES);
   const snip = pick(IPI_SNIPPETS);
   const [action, cls] = pick(IPI_ACTIONS);
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td class="mono dim">${nowStamp().slice(0, 8)}</td>
-    <td class="mono dim" style="font-size:11px">${src}</td>
-    <td>${vector}<div class="dim" style="font-size:10.5px">${concealer}</div></td>
-    <td class="mono" style="font-size:11px;color:var(--amber)">${snip}</td>
-    <td><span class="badge ${cls}">${action}</span></td>`;
+  const tr = row([
+    cell(nowStamp().slice(0, 8), "mono dim"),
+    cell(src, "mono dim", "font-size:11px"),
+    (() => { const td = cell(vector); const sub = document.createElement("div"); sub.className = "dim"; sub.setAttribute("style", "font-size:10.5px"); sub.textContent = concealer; td.appendChild(sub); return td; })(),
+    cell(snip, "mono", "font-size:11px;color:var(--amber)"),
+    badgeCell(action, cls),
+  ]);
   const body = $("#ipi-body");
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
@@ -769,82 +803,110 @@ const BUCKET_MS = 10000;          // 10 s rate buckets
 const BUCKETS = 60;               // × 60 = 10 minutes
 const BURST_WINDOW_MS = 60000;
 const BURST_THRESHOLD = 8;
-let eventLog = [];
-let evTotal = 0;
-let evPaused = false;
-let evFilter = "all";
-let shadowTimes = [];
-const rateBuckets = [];
+/* Stream state lives in one object so interval timers, the SSE feed and
+   the filter UI all mutate a single well-known owner instead of six
+   loose globals — nothing can reassign half the module by accident. */
+const Stream = {
+  eventLog: [],
+  evTotal: 0,
+  evPaused: false,
+  evFilter: "all",
+  shadowTimes: [],
+  rateBuckets: [],
+};
 
 function bucketAt(t) {
   const bt = Math.floor(t / BUCKET_MS) * BUCKET_MS;
   const empty = (x) => ({ t: x, signed: 0, known: 0, shadow: 0, tool: 0, human: 0 });
-  if (!rateBuckets.length) {
-    for (let x = bt - (BUCKETS - 1) * BUCKET_MS; x <= bt; x += BUCKET_MS) rateBuckets.push(empty(x));
-    return rateBuckets[rateBuckets.length - 1];
+  const rb = Stream.rateBuckets;
+  if (!rb.length) {
+    for (let x = bt - (BUCKETS - 1) * BUCKET_MS; x <= bt; x += BUCKET_MS) rb.push(empty(x));
+    return rb[rb.length - 1];
   }
-  const last = rateBuckets[rateBuckets.length - 1];
+  const last = rb[rb.length - 1];
   if (bt > last.t) {
-    for (let x = last.t + BUCKET_MS; x <= bt; x += BUCKET_MS) rateBuckets.push(empty(x));
-    while (rateBuckets.length > BUCKETS) rateBuckets.shift();
-    return rateBuckets[rateBuckets.length - 1];
+    for (let x = last.t + BUCKET_MS; x <= bt; x += BUCKET_MS) rb.push(empty(x));
+    while (rb.length > BUCKETS) rb.shift();
+    return rb[rb.length - 1];
   }
-  if (bt < rateBuckets[0].t) return null; // outside the 10-minute window
-  return rateBuckets.find((b) => b.t === bt) || last;
+  if (bt < rb[0].t) return null; // outside the 10-minute window
+  return rb.find((b) => b.t === bt) || last;
 }
 
-function evRowHtml(ev) {
-  const c = KIND_COLORS[ev.kind] || "#8b93b5";
-  let sig = '<span class="dim">—</span>';
-  if (ev.sig === "valid") sig = '<span class="ev-sig-ok">✓ valid</span>';
-  else if (ev.sig === "invalid") sig = '<span class="ev-sig-bad">✗ invalid</span>';
-  else if (ev.sig === "unresolved") sig = '<span class="ev-sig-pend">? no key</span>';
-  else if (ev.sig) sig = `<span class="ev-sig-pend">${escHtml(String(ev.sig))}</span>`;
-  return `<td class="dim">${new Date(ev.t).toISOString().slice(11, 19)}</td>
-<td><span class="ev-dot" style="background:${c}"></span>${ev.kind}</td>
-<td class="mono">${escHtml(ev.method)}</td>
-<td class="path" title="${escHtml(ev.path)}">${escHtml(ev.path)}</td>
-<td class="mono ev-agent">${escHtml(ev.agent)}</td>
-<td>${ev.status}</td>
-<td class="dim">${ev.ms}</td>
-<td>${sig}</td>`;
+/* Telemetry rows are built with DOM nodes + textContent, never
+   interpolated HTML: paths, User-Agents, header values and agent names
+   are attacker-controlled, so they must never reach a parser as markup. */
+function td(text, cls) {
+  const cell = document.createElement("td");
+  if (cls) cell.className = cls;
+  cell.textContent = text == null ? "" : String(text);
+  return cell;
+}
+
+function sigCell(sig) {
+  const cell = document.createElement("td");
+  const span = document.createElement("span");
+  if (sig === "valid") { span.className = "ev-sig-ok"; span.textContent = "✓ valid"; }
+  else if (sig === "invalid") { span.className = "ev-sig-bad"; span.textContent = "✗ invalid"; }
+  else if (sig === "unresolved") { span.className = "ev-sig-pend"; span.textContent = "? no key"; }
+  else if (sig) { span.className = "ev-sig-pend"; span.textContent = String(sig); }
+  else { span.className = "dim"; span.textContent = "—"; }
+  cell.appendChild(span);
+  return cell;
+}
+
+function evRowEl(ev) {
+  const tr = document.createElement("tr");
+  tr.appendChild(td(new Date(ev.t).toISOString().slice(11, 19), "dim"));
+  const kindCell = document.createElement("td");
+  const dot = document.createElement("span");
+  dot.className = "ev-dot";
+  dot.style.background = KIND_COLORS[ev.kind] || "#8b93b5";
+  kindCell.appendChild(dot);
+  kindCell.appendChild(document.createTextNode(String(ev.kind)));
+  tr.appendChild(kindCell);
+  tr.appendChild(td(ev.method, "mono"));
+  const pathCell = td(ev.path, "path"); // title set as a property, not markup
+  pathCell.title = ev.path == null ? "" : String(ev.path);
+  tr.appendChild(pathCell);
+  tr.appendChild(td(ev.agent, "mono ev-agent"));
+  tr.appendChild(td(ev.status));
+  tr.appendChild(td(ev.ms, "dim"));
+  tr.appendChild(sigCell(ev.sig));
+  return tr;
 }
 
 function renderEventRow(ev) {
   const body = $("#ev-body");
   if (!body) return;
-  const tr = document.createElement("tr");
-  tr.innerHTML = evRowHtml(ev);
-  body.prepend(tr);
+  body.prepend(evRowEl(ev));
   while (body.children.length > EV_ROWS_VISIBLE) body.lastChild.remove();
 }
 
 function renderEventList() {
   const body = $("#ev-body");
   if (!body) return;
-  body.innerHTML = "";
-  for (const ev of eventLog) {
-    if (evFilter !== "all" && ev.kind !== evFilter) continue;
-    const tr = document.createElement("tr");
-    tr.innerHTML = evRowHtml(ev);
-    body.appendChild(tr);
+  body.replaceChildren();
+  for (const ev of Stream.eventLog) {
+    if (Stream.evFilter !== "all" && ev.kind !== Stream.evFilter) continue;
+    body.appendChild(evRowEl(ev));
     if (body.children.length >= EV_ROWS_VISIBLE) break;
   }
 }
 
 function updateEvCount() {
   const el = $("#ev-count");
-  if (el) el.textContent = `${fmtInt(evTotal)} captured`;
+  if (el) el.textContent = `${fmtInt(Stream.evTotal)} captured`;
 }
 
 function pushEvent(ev) {
-  eventLog.unshift(ev);
-  if (eventLog.length > EV_CAP) eventLog.pop();
-  evTotal++;
+  Stream.eventLog.unshift(ev);
+  if (Stream.eventLog.length > EV_CAP) Stream.eventLog.pop();
+  Stream.evTotal++;
   const b = bucketAt(ev.t);
   if (b && Object.prototype.hasOwnProperty.call(b, ev.kind)) b[ev.kind]++;
-  if (ev.kind === "shadow") { shadowTimes.push(ev.t); checkBurst(); }
-  if (!evPaused && (evFilter === "all" || evFilter === ev.kind)) renderEventRow(ev);
+  if (ev.kind === "shadow") { Stream.shadowTimes.push(ev.t); checkBurst(); }
+  if (!Stream.evPaused && (Stream.evFilter === "all" || Stream.evFilter === ev.kind)) renderEventRow(ev);
   updateEvCount();
 }
 
@@ -856,11 +918,11 @@ function drawRate() {
   ctx.clearRect(0, 0, w, h);
   gridLines(ctx, w, h);
   const order = ["human", "tool", "known", "shadow", "signed"];
-  const totals = rateBuckets.map((b) => order.reduce((s, k) => s + b[k], 0));
+  const totals = Stream.rateBuckets.map((b) => order.reduce((s, k) => s + b[k], 0));
   const max = Math.max(4, ...totals);
   const bw = w / BUCKETS;
   const pad = 14;
-  rateBuckets.forEach((b, i) => {
+  Stream.rateBuckets.forEach((b, i) => {
     let y = h - pad;
     for (const k of order) {
       const v = (b[k] / max) * (h - pad - 8);
@@ -890,12 +952,12 @@ function checkBurst() {
   const el = $("#alert-banner");
   if (!el) return;
   const now = Date.now();
-  shadowTimes = shadowTimes.filter((t) => now - t < BURST_WINDOW_MS);
-  if (shadowTimes.length >= BURST_THRESHOLD) {
+  Stream.shadowTimes = Stream.shadowTimes.filter((t) => now - t < BURST_WINDOW_MS);
+  if (Stream.shadowTimes.length >= BURST_THRESHOLD) {
     el.hidden = false;
     const txt = $("#alert-text");
-    if (txt) txt.textContent = `Shadow burst — ${shadowTimes.length} stealth requests in the last 60 s`;
-  } else if (shadowTimes.length < 4) {
+    if (txt) txt.textContent = `Shadow burst — ${Stream.shadowTimes.length} stealth requests in the last 60 s`;
+  } else if (Stream.shadowTimes.length < 4) {
     el.hidden = true;
   }
 }
@@ -904,20 +966,25 @@ setInterval(checkBurst, 3000);
 /* controls: kind filter, pause, JSON export */
 $$("#ev-filters .chip[data-filter]").forEach((c) => {
   c.addEventListener("click", () => {
-    evFilter = c.dataset.filter;
-    $$("#ev-filters .chip[data-filter]").forEach((x) => x.classList.toggle("active", x === c));
+    Stream.evFilter = c.dataset.filter;
+    $$("#ev-filters .chip[data-filter]").forEach((x) => {
+      const on = x === c;
+      x.classList.toggle("active", on);
+      x.setAttribute("aria-pressed", on ? "true" : "false");
+    });
     renderEventList();
   });
 });
 const pauseBtn = $("#ev-pause");
 if (pauseBtn) pauseBtn.addEventListener("click", () => {
-  evPaused = !evPaused;
-  pauseBtn.textContent = evPaused ? "▶ Resume" : "⏸ Pause";
-  pauseBtn.classList.toggle("paused", evPaused);
+  Stream.evPaused = !Stream.evPaused;
+  pauseBtn.textContent = Stream.evPaused ? "▶ Resume" : "⏸ Pause";
+  pauseBtn.classList.toggle("paused", Stream.evPaused);
+  pauseBtn.setAttribute("aria-pressed", Stream.evPaused ? "true" : "false");
 });
 const exportBtn = $("#ev-export");
 if (exportBtn) exportBtn.addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(eventLog, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(Stream.eventLog, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "aegis-events-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "") + ".json";
@@ -1044,12 +1111,12 @@ function enterLiveMode() {
   const sb = $("#shadow-body");
   if (sb) sb.innerHTML = "";
   // hand the event stream over to real data
-  eventLog = [];
-  evTotal = 0;
-  shadowTimes = [];
-  rateBuckets.length = 0;
-  evPaused = false;
-  evFilter = "all";
+  Stream.eventLog = [];
+  Stream.evTotal = 0;
+  Stream.shadowTimes = [];
+  Stream.rateBuckets.length = 0;
+  Stream.evPaused = false;
+  Stream.evFilter = "all";
   const eb = $("#ev-body");
   if (eb) eb.innerHTML = "";
   $$("#ev-filters .chip").forEach((c) => c.classList.toggle("active", c.dataset.filter === "all"));
@@ -1195,13 +1262,18 @@ async function driveVerify(ev) {
 function addShadowRowReal(ev) {
   const conf = ev.shadow ? ev.shadow.conf : 70;
   const signal = ev.shadow ? ev.shadow.signal : "unsigned automation";
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td class="mono dim">${new Date(ev.t).toISOString().slice(11, 19)}<div style="font-size:9px;letter-spacing:.1em;color:var(--green)">LIVE</div></td>
-    <td class="mono">${escHtml(ev.ip)}</td>
-    <td class="dim" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ev.ua || "(none)")}</td>
-    <td>${escHtml(signal)}</td>
-    <td><span class="badge ${conf > 90 ? "bad" : "warn"}">${conf}%</span></td>`;
+  const timeCell = cell(new Date(ev.t).toISOString().slice(11, 19), "mono dim");
+  const liveTag = document.createElement("div");
+  liveTag.setAttribute("style", "font-size:9px;letter-spacing:.1em;color:var(--green)");
+  liveTag.textContent = "LIVE";
+  timeCell.appendChild(liveTag);
+  const tr = row([
+    timeCell,
+    cell(ev.ip, "mono"),
+    cell(ev.ua || "(none)", "dim", "font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"),
+    cell(signal),
+    badgeCell(conf + "%", conf > 90 ? "bad" : "warn"),
+  ]);
   const body = $("#shadow-body");
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
@@ -1220,6 +1292,12 @@ function applySnapshot(s) {
   live.known = bk.known || 0;
   live.human = bk.human || 0;
   live.tool = bk.tool || 0;
+  if (s.signals) {
+    live.signals = s.signals;
+    kpi.ipi = 1247 + (s.signals.ipi || 0);
+    kpi.anom = 318 + (s.signals.trajad || 0);
+    kpi.rev = 84921.55 + (s.signals.revenue || 0);
+  }
   if (!liveMode) { liveMode = true; enterLiveMode(); }
   renderKpis();
   setPill(`Live Capture · ${live.total} events`, "live");
@@ -1248,6 +1326,79 @@ function ingestReal(ev) {
   renderRealHeaders(ev);
   driveVerify(ev);
   if (ev.kind === "shadow") addShadowRowReal(ev);
+  applyRealSignals(ev);
+}
+
+/* Panels 04–09 consume real server-derived signals instead of only
+   simulating: IPI injections, TrajAD halts, MCP tool calls, revenue. */
+function applyRealSignals(ev) {
+  const sg = ev.signals;
+  if (!sg) return;
+  live.signals = live.signals || { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+
+  if (sg.ipi) {
+    live.signals.ipi++;
+    kpi.ipi++;
+    addIpiRowReal(ev, sg.ipi);
+  }
+  if (sg.trajad) {
+    live.signals.trajad++;
+    kpi.anom++;
+    addTrace("ANOMALY", sg.trajad, true);
+    const st = $("#trajad-state");
+    if (st) { st.textContent = "TrajAD: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200); }
+  }
+  if (sg.toolCall) {
+    live.signals.toolCalls++;
+    addMcpRowReal(ev);
+  }
+  if (sg.revenue) {
+    live.signals.revenue += sg.revenue;
+    kpi.rev += sg.revenue;
+  }
+  renderKpis();
+  markPanelLive("#ipi-body");
+  markPanelLive("#trace-stream");
+  markPanelLive("#mcp-body");
+  markPanelLive("#chart-revenue");
+}
+
+/* flip a panel's SIM tag to LIVE when real data starts arriving */
+function markPanelLive(sel) {
+  const el = $(sel);
+  if (el) feedTag(el, "LIVE");
+}
+
+function addIpiRowReal(ev, vector) {
+  const tr = row([
+    cell(new Date(ev.t).toISOString().slice(11, 19), "mono dim"),
+    cell(ev.path || "—", "mono dim", "font-size:11px"),
+    cell(vector),
+    cell((ev.ua || "(none)").slice(0, 80), "mono", "font-size:11px;color:var(--amber)"),
+    badgeCell("BLOCKED", "bad"),
+  ]);
+  const body = $("#ipi-body");
+  if (!body) return;
+  body.prepend(tr);
+  while (body.children.length > 40) body.lastChild.remove();
+}
+
+function addMcpRowReal(ev) {
+  const ok = ev.status < 400;
+  const tr = row([
+    cell(new Date(ev.t).toISOString().slice(11, 19), "mono dim"),
+    cell(ev.kind, "mono"),
+    cell(ev.path || "—", "mono", "color:var(--cyan)"),
+    cell(JSON.stringify({ ua: (ev.ua || "").slice(0, 40) }), "mono dim", "font-size:11px"),
+    badgeCell("live", "vio"),
+    badgeCell(ok ? "200 · structured" : ev.status, ok ? "ok" : "bad"),
+    cell(Math.round(ev.ms || 0) + " ms", "mono"),
+    cell("—", "mono dim", "font-size:11px"),
+  ]);
+  const body = $("#mcp-body");
+  if (!body) return;
+  body.prepend(tr);
+  while (body.children.length > 40) body.lastChild.remove();
 }
 
 function connectCapture() {
