@@ -56,10 +56,53 @@ test("server.js guards side effects behind require.main and exports its pure fun
   ]) {
     assert.ok(exp[1].includes(name), `export missing: ${name}`);
   }
-  // no arbitrary keyid dereferencing — that would be an SSRF primitive
-  assert.ok(!/fetch\s*\(|https?\.request/.test(
-    src.slice(src.indexOf("RFC 9421 HTTP Message Signatures"), src.indexOf("counters = {"))
-  ), "verification module must not make outbound requests");
+  // SSRF guard (v2): remote JWKS resolution exists but is default-deny.
+  // The guarantee is now behavioral, not "no fetch anywhere": without an
+  // allowlist, and for non-allowlisted / non-https / private hosts, nothing
+  // is ever requested. See the fetchRemoteJwks tests below.
+  const verifySlice = src.slice(src.indexOf("RFC 9421 HTTP Message Signatures"), src.indexOf("counters = {") + 400);
+  assert.ok(verifySlice.includes("jwksAllowlist"), "verification path must gate remote keys on the allowlist");
+});
+
+test("remote JWKS resolution is default-deny and refuses private hosts", async () => {
+  const { fetchRemoteJwks, isPrivateHost, jwksAllowlist } = require("../server.js");
+
+  // no allowlist configured → deny before any socket is opened
+  delete process.env.JWKS_ALLOWLIST;
+  assert.deepStrictEqual(jwksAllowlist(), [], "allowlist should be empty by default");
+  assert.strictEqual(await fetchRemoteJwks("https://example.com/.well-known/jwks.json"), null,
+    "unallowlisted URL must be denied");
+
+  // allowlisted origin, but private/loopback literals are still refused
+  process.env.JWKS_ALLOWLIST = "https://127.0.0.1,https://localhost,https://internal.example";
+  assert.strictEqual(await fetchRemoteJwks("https://127.0.0.1/jwks.json"), null, "loopback must be refused");
+  assert.strictEqual(await fetchRemoteJwks("https://localhost/jwks.json"), null, "localhost must be refused");
+
+  // non-https schemes are never accepted even if listed
+  process.env.JWKS_ALLOWLIST = "http://example.com";
+  assert.strictEqual(await fetchRemoteJwks("http://example.com/jwks.json"), null, "http must be refused");
+
+  // suffix/lookalike origins must not match an allowlist entry
+  process.env.JWKS_ALLOWLIST = "https://example.com";
+  assert.strictEqual(await fetchRemoteJwks("https://example.com.attacker.test/jwks.json"), null,
+    "suffix lookalike must be denied");
+  delete process.env.JWKS_ALLOWLIST;
+
+  for (const h of ["127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1", "169.254.169.254", "localhost", "[::1]"]) {
+    assert.ok(isPrivateHost(h), `${h} should be private`);
+  }
+  assert.ok(!isPrivateHost("openai.com"), "public host should not be private");
+});
+
+test("app.js is bundled from src/*.js modules (lossless round-trip)", () => {
+  const files = fs.readdirSync("src").filter((f) => f.endsWith(".js")).sort();
+  assert.ok(files.length >= 10, `expected many modules, found ${files.length}`);
+  // concatenating src/ must reproduce app.js byte-for-byte
+  const joined = files.map((f) => fs.readFileSync(`src/${f}`, "utf8")).join("");
+  assert.strictEqual(joined, read("app.js"), "app.js is stale — run `npm run build`");
+  // and build.js must actually perform the bundling
+  assert.match(read("build.js"), /readdirSync\(SRC_DIR\)/);
+  assert.ok(read("build.js").includes('filter((f) => f.endsWith(".js"))'));
 });
 
 test("escHtml neutralizes quotes as well as angle brackets", () => {

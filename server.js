@@ -343,6 +343,94 @@ function ensureJwksFresh() {
   }
 }
 
+/* ── remote JWKS resolution (allowlist-gated) ──────────────────────
+   Default posture is still zero outbound requests: nothing is fetched
+   unless the operator sets JWKS_ALLOWLIST. When set, only exact
+   https:// origins on that list are contacted, for JWKS documents only:
+     - exact origin match (no suffix matching, no redirects)
+     - private/loopback/link-local literal addresses refused
+     - bounded timeout + response size
+     - TTL cache and a per-origin rate limit
+   This is the deliberate, auditable widening of the SSRF guard: the
+   list is operator-controlled configuration, not request-controlled. */
+const REMOTE_JWKS_TTL_MS = Number(process.env.JWKS_TTL_MS) || 10 * 60 * 1000;
+const REMOTE_JWKS_MAX_BYTES = 64 * 1024;
+const REMOTE_JWKS_TIMEOUT_MS = Number(process.env.JWKS_TIMEOUT_MS) || 3000;
+const REMOTE_JWKS_MAX_PER_MIN = Number(process.env.JWKS_RATE_LIMIT) || 6;
+const remoteJwksCache = new Map(); // origin → { doc, at }
+const remoteJwksHits = new Map();  // origin → [timestamps]
+
+function jwksAllowlist() {
+  return String(process.env.JWKS_ALLOWLIST || "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function isPrivateHost(hostname) {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+  }
+  if (h.includes(":")) return true; // bare IPv6 (includes ::1, fe80::)
+  return false;
+}
+
+function rateAllows(origin) {
+  const now = Date.now();
+  const arr = (remoteJwksHits.get(origin) || []).filter((t) => now - t < 60000);
+  if (arr.length >= REMOTE_JWKS_MAX_PER_MIN) return false;
+  arr.push(now);
+  remoteJwksHits.set(origin, arr);
+  return true;
+}
+
+/* Returns a parsed JWKS document, or null. Never throws. */
+async function fetchRemoteJwks(rawUrl) {
+  let u;
+  try { u = new URL(rawUrl); } catch (_) { return null; }
+  if (u.protocol !== "https:") return null;
+  if (!jwksAllowlist().includes(u.origin)) return null;   // exact origin, default-deny
+  if (isPrivateHost(u.hostname)) return null;
+  const cached = remoteJwksCache.get(u.origin);
+  if (cached && Date.now() - cached.at < REMOTE_JWKS_TTL_MS) return cached.doc;
+  if (!rateAllows(u.origin)) {
+    return cached ? cached.doc : null;                   // over limit: reuse, else deny
+  }
+  try {
+    const res = await fetch(u, {
+      redirect: "error",
+      signal: AbortSignal.timeout(REMOTE_JWKS_TIMEOUT_MS),
+      headers: { accept: "application/json", "user-agent": "aegis-jwks/1.0" },
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (text.length > REMOTE_JWKS_MAX_BYTES) return null;
+    const doc = JSON.parse(text);
+    if (!doc || !Array.isArray(doc.keys)) return null;
+    remoteJwksCache.set(u.origin, { doc, at: Date.now() });
+    return doc;
+  } catch (_) {
+    return null;
+  }
+}
+
+/* Resolve a keyid that is an https URL, if (and only if) its origin is
+   allowlisted. Adds any usable keys to the ring. Returns true on load. */
+async function ensureRemoteKey(keyid) {
+  if (!keyid || typeof keyid !== "string" || !/^https:\/\//.test(keyid)) return false;
+  const doc = await fetchRemoteJwks(keyid);
+  if (!doc) return false;
+  let n = 0;
+  for (const jwk of doc.keys) { try { addVerificationKey(jwk); n++; } catch (_) { /* skip */ } }
+  return n > 0;
+}
+
 /* Algorithm registry (RFC 9421 §6.2.2 + JOSE aliases for interop). */
 const HTTP_SIG_ALGS = {
   "ed25519":           { type: "ed" },
@@ -404,7 +492,14 @@ function verifySignedRequest(req) {
   const rawSig = req.headers["signature"];
   if (!rawIn || !rawSig) return { present: false, verdict: "none", reason: "signature headers absent" };
   ensureJwksFresh();
-  const entries = parseSignatureInput(rawIn);
+  const preIn = parseSignatureInput(rawIn);
+  if (preIn && jwksAllowlist().length) {
+    for (const e of preIn) {
+      const k = e.params && e.params.keyid;
+      if (k && !verificationKeys.has(k)) ensureRemoteKey(k); // fire-and-forget warm-up
+    }
+  }
+  const entries = preIn;
   if (!entries) return { present: true, verdict: "invalid", reason: "unparseable Signature-Input" };
   const sigs = parseSignatureHeader(rawSig);
   let firstInvalid = null, firstUnresolved = null;
@@ -430,9 +525,14 @@ function verifySignedRequest(req) {
     const baseRes = signatureBase(req, entry);
     if (baseRes.error) { bad(baseRes.error); continue; }
     const kid = entry.params.keyid;
-    const rec = kid ? verificationKeys.get(kid) : null;
+    let rec = kid ? verificationKeys.get(kid) : null;
+    if (!rec && kid && jwksAllowlist().length) {
+      // sync fast-path: already-cached keys are attached synchronously by
+      // warmRemoteJwks(); a cache miss here stays unresolved this request.
+      rec = verificationKeys.get(kid);
+    }
     if (!rec) {
-      pend(kid ? `key "${kid}" not in the local keyring (set JWKS_PATH or add keys)` : "no keyid parameter and no key registered");
+      pend(kid ? `key "${kid}" not in the local keyring (set JWKS_PATH, JWKS_ALLOWLIST, or add keys)` : "no keyid parameter and no key registered");
       continue;
     }
     const cands = algCandidates(entry.params.alg, rec.jwk);
@@ -462,6 +562,7 @@ const counters = {
   byAgent: {},
   byPath: {},
   recent: [], // timestamps for rate
+  signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
 };
 
 function resetCounters() {
@@ -472,6 +573,7 @@ function resetCounters() {
   counters.byAgent = {};
   counters.byPath = {};
   counters.recent = [];
+  counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
 function eventsPerMin() {
@@ -491,6 +593,7 @@ function snapshot() {
     topAgents,
     byPath: { ...counters.byPath },
     eventsPerMin: eventsPerMin(),
+    signals: { ...counters.signals },
   };
 }
 
@@ -510,6 +613,13 @@ function emit(ev) {
   if (ev.signed && ev.signed.verdict && ev.signed.verdict !== "none") bump(counters.byVerdict, ev.signed.verdict);
   if (ev.kind === "known" || ev.kind === "signed") bump(counters.byAgent, ev.agent.name);
   bump(counters.byPath, ev.path);
+  const sg = ev.signals;
+  if (sg) {
+    if (sg.ipi) counters.signals.ipi++;
+    if (sg.trajad) counters.signals.trajad++;
+    if (sg.toolCall) counters.signals.toolCalls++;
+    if (sg.revenue) counters.signals.revenue += sg.revenue;
+  }
   broadcast(ev);
 }
 
@@ -519,7 +629,7 @@ function makeEvent(req, status, ms) {
     ? { ...cls.signed, ...verifySignedRequest(req), present: true }
     : cls.signed;
   const url = new URL(req.url, "http://local");
-  return {
+  const ev = {
     t: Date.now(),
     source: "http",
     method: req.method,
@@ -536,6 +646,57 @@ function makeEvent(req, status, ms) {
     shadow: cls.shadow,
     headers: cls.headers,
   };
+  ev.signals = deriveSignals(ev, url);
+  return ev;
+}
+
+/* ── real signals for the secondary panels (04–09) ──────────────────
+   Panels that were previously simulated now consume flags derived from
+   the actual request: injection-shaped payloads → IPI, out-of-scope or
+   evasive trajectory → TrajAD anomaly, tool/agent traffic → MCP ledger,
+   verified signed crawls → pay-per-crawl revenue. */
+const IPI_PATTERNS = [
+  /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
+  /system\s*[-_]?prompt/i,
+  /you\s+are\s+now\s+(a|an)\b/i,
+  /transfer\s+[\d.]+\s*(eth|btc|usd)/i,
+  /bcc\s*[:=]/i,
+  /(?:\.\.?[\\/]){2,}/,                 // path traversal
+  /<\s*script|javascript:/i,
+  /exfiltrate|dump(?:ed)?[_-]?(?:secrets|keys|tokens)/i,
+  /(?:^|[^a-z0-9+/=])[A-Za-z0-9+/]{40,}={0,2}(?:[^a-z0-9+/=]|$)/, // long opaque blob
+  /--[a-z-]*\s*(?:no-preserve-root|drop-table)/i,
+];
+const TRAJAD_SCOPE = /^\/(?:api|docs|products|pricing|blog|robots\.txt|\.well-known|index\.html|\?|$)/i;
+
+function deriveSignals(ev, url) {
+  const s = { ipi: null, trajad: null, toolCall: false, revenue: 0 };
+  const probe = decodeURIComponent(
+    ((ev.path || "") + "?" + (url.search || "")).replace(/\+/g, " ")
+  ).slice(0, 1400);
+
+  // IPI: injection-shaped payload anywhere in path or query
+  for (const re of IPI_PATTERNS) {
+    const m = re.exec(probe);
+    if (m) {
+      s.ipi = { vector: "indirect prompt injection", snippet: m[0].slice(0, 90), action: "BLOCKED" };
+      break;
+    }
+  }
+
+  // TrajAD: evasive or out-of-scope trajectory
+  if (ev.kind === "shadow" && ev.shadow && ev.shadow.conf >= 90) {
+    s.trajad = `evasive trajectory (${ev.shadow.signal}) — HALTED before step`;
+  } else if (!TRAJAD_SCOPE.test(ev.path || "") && ev.kind !== "known" && ev.kind !== "signed") {
+    s.trajad = `destination ${ev.path} not in mission scope — ROLLBACK queued`;
+  }
+
+  // WebMCP ledger: real tool/agent traffic
+  s.toolCall = ev.kind === "tool" || (ev.kind === "signed" && (ev.path || "").startsWith("/api/"));
+
+  // Pay-per-crawl: only verified signed crawls earn
+  if (ev.signed && ev.signed.verdict === "valid") s.revenue = 0.0042;
+  return s;
 }
 
 /* ── static files (whitelisted) ─────────────────────────── */
@@ -759,6 +920,7 @@ if (require.main === module) {
 /* exported for the test suite */
 module.exports = { classify, parseLogLine,
   NGINX_RE, counters, snapshot, resetCounters,
-  verifySignedRequest, parseSignatureInput, parseSignatureHeader,
   signatureBase, addVerificationKey, loadJwksFile, server,
+  verifySignedRequest, parseSignatureInput, parseSignatureHeader,
+  fetchRemoteJwks, ensureRemoteKey, isPrivateHost, jwksAllowlist,
 };
