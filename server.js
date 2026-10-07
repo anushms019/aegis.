@@ -25,7 +25,9 @@ const path = require("path");
 const crypto = require("node:crypto");
 
 const PORT = Number(process.env.PORT) || 8788;
-const HOST = "127.0.0.1";
+// Containers must listen on all interfaces; the local default stays
+// loopback-only so an unconfigured instance is never exposed.
+const HOST = process.env.HOST || "127.0.0.1";
 const ROOT = __dirname;
 const LOG_PATH = process.env.LOG_PATH || null;
 

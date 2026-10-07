@@ -1,0 +1,82 @@
+# AEGIS capture server — single-replica Deployment.
+# Readiness uses /api/snapshot (aggregate counters, returns 200 when the
+# event pipeline is answering); liveness uses the cheap /api/health probe.
+# Both are telemetry paths, so probe traffic never pollutes the metrics.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis
+  labels:
+    app: aegis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aegis
+  template:
+    metadata:
+      labels:
+        app: aegis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: aegis
+          # Build and push the image from the repository root:
+          #   docker build -t <registry>/aegis:latest .
+          image: aegis:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8788
+              protocol: TCP
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "8788"
+            - name: NODE_ENV
+              value: "production"
+            - name: JWKS_ALLOWLIST
+              valueFrom:
+                configMapKeyRef:
+                  name: aegis-config
+                  key: JWKS_ALLOWLIST
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/snapshot
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      # Optional: mount a local keyring (set JWKS_PATH to match):
+      # volumes:
+      #   - name: jwks
+      #     configMap:
+      #       name: aegis-jwks

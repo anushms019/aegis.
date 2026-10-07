@@ -1,0 +1,9 @@
+# AEGIS — Kubernetes manifests.
+#   kubectl apply -k deploy/k8s/
+# Includes liveness (/api/health) and readiness (/api/snapshot) probes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml

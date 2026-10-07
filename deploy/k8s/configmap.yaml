@@ -1,0 +1,14 @@
+# Operator configuration for AEGIS. Remote JWKS fetching is default-deny:
+# leave JWKS_ALLOWLIST empty to contact nothing, or list exact https origins.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-config
+  labels:
+    app: aegis
+data:
+  JWKS_ALLOWLIST: ""
+  # Example (exact origins only, no paths, no wildcards):
+  # JWKS_ALLOWLIST: "https://keys.example.com,https://keys2.example.com"
+  # Pair with SPKI pinning in a Secret if your origins have pinned certs:
+  #   JWKS_PINS=https://keys.example.com=sha256/<base64-spki>

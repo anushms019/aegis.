@@ -1,0 +1,18 @@
+# Keep the build context small and never leak local state into images.
+.git
+.github
+.gitignore
+node_modules
+docs
+scripts
+*.log
+.server-out.log
+.demo-jwks.json
+Dockerfile
+docker-compose.yml
+deploy
+README.md
+CONTRIBUTING.md
+SECURITY.md
+CHANGELOG.md
+LICENSE
