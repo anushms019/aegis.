@@ -144,7 +144,9 @@ test("WebMCP schema inspector modal is wired into the dashboard", () => {
 });
 
 test("validateAgainstSchema passes conforming payloads and flags every violation class", () => {
-  const src = read("app.js");
+  // normalize line endings: git may check out CRLF (autocrlf), and the
+  // extraction anchors below are LF-based
+  const src = read("app.js").replace(/\r\n/g, "\n");
   const grab = (name) => {
     const s = src.indexOf(`function ${name}`);
     assert.ok(s !== -1, `${name} missing from bundle`);
