@@ -15,7 +15,7 @@
   <a href="https://github.com/anushms/aegis/actions/workflows/ci.yml"><img src="https://github.com/anushms/aegis/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js >= 20" />
-  <img src="https://img.shields.io/badge/tests-45%20passing-success.svg" alt="45 tests passing" />
+  <img src="https://img.shields.io/badge/tests-66%20passing-success.svg" alt="66 tests passing" />
 </p>
 
 ---
@@ -90,12 +90,30 @@ the shadow-burst banner within seconds.
 
 **Configuration:**
 
-| Variable    | Default      | Purpose                                    |
-| ----------- | ------------ | ------------------------------------------ |
-| `PORT`      | `8788`       | HTTP listen port                           |
-| `JWKS_PATH` | *(disabled)* | JWKS file for signature verification (reloaded on change) |
-| `LOG_PATH`  | *(disabled)* | Access log to tail (nginx or JSON lines)   |
-| `HOST`      | `127.0.0.1`  | Bind address                               |
+| Variable          | Default      | Purpose                                    |
+| ----------------- | ------------ | ------------------------------------------ |
+| `PORT`            | `8788`       | HTTP listen port                           |
+| `HOST`            | `127.0.0.1`  | Bind address (`0.0.0.0` in containers)     |
+| `JWKS_PATH`       | *(disabled)* | JWKS file for signature verification (reloaded on change) |
+| `LOG_PATH`        | *(disabled)* | Access log to tail (nginx or JSON lines)   |
+| `JWKS_ALLOWLIST`  | *(empty — deny all)* | Exact `https://` origins allowed for remote JWKS fetches |
+| `JWKS_PINS`       | *(disabled)* | Per-origin TLS SPKI pins: `origin=sha256/<b64>\|<hex>,…` |
+| `JWKS_CA_FILE`    | *(system roots)* | Extra CA bundle (PEM) for private-PKI JWKS origins |
+
+**Prometheus:** `GET /metrics` exposes request counts by kind, verification
+pass/fail ratios, a request-duration histogram, signal counters, and JWKS
+fetch results (text exposition format 0.0.4). The scrape path is telemetry,
+so it never inflates what it reports.
+
+**Containers / Kubernetes:**
+
+```bash
+docker compose up --build            # http://localhost:8788
+kubectl apply -k deploy/k8s/         # probes: /api/health + /api/snapshot
+```
+
+The multi-stage `Dockerfile` runs the full test suite inside the build stage,
+ships a non-root minimal runtime, and declares a `HEALTHCHECK`.
 
 **Dashboard only:** open `index.html` directly in a browser — it is fully
 self-contained and runs from its built-in simulation engine (`file://` pages never
@@ -104,15 +122,16 @@ attempt a live connection).
 ## Testing
 
 ```bash
-npm test        # 45 tests, four suites
+npm test        # 66 tests, five suites
 ```
 
 | Suite | Covers |
 | --- | --- |
 | `tests/verify.test.js` | **RFC 9421 Appendix B.2.6 test vector**, signature-base policy (coverage, freshness, keyring, algorithms), parser edge cases |
-| `tests/integration.test.js` | the real HTTP server on an ephemeral port: classification, verdict counters, snapshot shape, SSE hydration + broadcast |
+| `tests/jwks.test.js` | backoff math, `JWKS_PINS` parsing + fail-closed pin verification, background-queue gating/dedupe, live HTTPS transport (pin match/mismatch, redirects, size cap, timeout) |
+| `tests/integration.test.js` | the real HTTP server on an ephemeral port: classification, verdict counters, snapshot shape, `/metrics` exposition, SSE hydration + broadcast |
 | `tests/server.test.js` | classification contract (known UA matrix, shadow confidence, tool-vs-shadow regressions), nginx/JSON log parsing |
-| `tests/build.test.js` | `index.html` byte-synced to its sources, `src/` ↔ `app.js` bundle round-trip, self-contained page, honesty markers, remote-JWKS SSRF guard (default-deny) |
+| `tests/build.test.js` | `index.html` byte-synced to its sources, `src/` ↔ `app.js` bundle round-trip, self-contained page, honesty markers, remote-JWKS SSRF guard (default-deny), WebMCP inspector + schema validator |
 
 CI runs the suite on Node 20, 22, and 24, syntax-checks every source file, and fails if
 a committed `index.html` drifts from `styles.css` / `src/*.js`.
@@ -125,8 +144,11 @@ index.html            generated, self-contained dashboard (the deliverable)
 ├── src/*.js          telemetry engine split into 16 modules (one per panel)
 ├── app.js            generated bundle of src/*.js — do not edit
 └── build.js          bundles src/ → app.js → index.html (node build.js)
-server.js             capture server: classifier, RFC 9421 verifier, SSE, log tail
-tests/                four node:test suites (npm test)
+server.js             capture server: classifier, RFC 9421 verifier, /metrics, SSE, log tail
+tests/                five node:test suites (npm test); fixtures/ = test TLS cert
+docker-compose.yml    hardened single-host run (read-only, dropped caps)
+Dockerfile            multi-stage: build+test gate → minimal non-root runtime
+deploy/k8s/           Deployment (liveness/readiness probes) + Service + ConfigMap
 scripts/demo-traffic.js   signed + shadow + bot traffic generator for demos
 scripts/screenshot.js     headless-Chrome captures for the screenshots above
 docs/                 screenshots, logo
@@ -153,7 +175,9 @@ The console distinguishes what it measures from what it models:
 
 Signature verification is designed to fail closed: unknown keys are `UNRESOLVED`,
 never trusted; insufficient component coverage or an expired window is `INVALID`.
-The server never fetches URLs found in `keyid` or `Signature-Agent` headers.
+The server never fetches URLs found in `keyid` or `Signature-Agent` headers by
+default — remote JWKS fetching is default-deny behind an operator allowlist,
+with optional TLS SPKI pinning, exponential backoff, and bounded size/time/rate.
 See [SECURITY.md](SECURITY.md) for the full threat model and reporting process.
 
 ## References

@@ -41,19 +41,32 @@ fetch must pass all of the following or it is refused before any socket opens:
 | Allowlist | exact `origin` match against `JWKS_ALLOWLIST` (default: empty → deny everything) |
 | Scheme | `https:` only |
 | Host | loopback, RFC1918, link-local (incl. `169.254.169.254`), CGNAT, `.local`/`.internal` and bare IPv6 refused |
-| Redirects | `redirect: "error"` — never followed |
-| Size / time | 64 KB cap, 3 s timeout |
+| Redirects | 3xx responses are refused, never followed |
+| Size / time | 64 KB cap enforced mid-stream, 3 s hard timeout |
 | Rate | 6 fetches per origin per minute, then reuse-or-deny |
 | Cache | 10-minute TTL so keys are not re-fetched per request |
+| Backoff | failures back off exponentially per origin (1 s → 5 min, ±20 % jitter); during backoff the last good document is served stale, or `null` if there is none |
+| Pinning | optional `JWKS_PINS` (per-origin SPKI pins, base64 or hex) verified against the live TLS peer certificate **before any body byte is accepted** — a mismatch fails closed; unpinned origins keep standard WebPKI validation |
+| CA trust | optional `JWKS_CA_FILE` adds an operator CA bundle for private-PKI origins; never request-controlled |
 
 The allowlist is configuration the operator writes; a remote party cannot add
-to it by sending headers. Verification itself remains synchronous — a missing
-key stays `unresolved` for that request and the keyring warms in the
-background for later ones.
+to it by sending headers. Fetches run on a **background queue** deduplicated
+per origin — a burst of unknown `keyid`s opens one socket and never blocks a
+live request — and an unref'd refresher re-queues cached origins past half
+their TTL so keys rotate without traffic. Verification itself stays
+synchronous: a missing key stays `unresolved` for that request and the
+keyring warms for later ones.
+
+The TLS transport uses stdlib `https` with a no-reuse agent, so every fetch
+performs a full handshake and the peer certificate is always inspectable
+(session resumption could otherwise hide it from pinning).
 
 `tests/build.test.js` asserts the verification path is gated on
 `jwksAllowlist()` and exercises every refusal above (empty allowlist, loopback,
-`http:`, suffix-lookalike origins), so the guard cannot regress silently.
+`http:`, suffix-lookalike origins); `tests/jwks.test.js` covers backoff math,
+pin parsing and fail-closed verification, queue gating and dedupe, and the
+live transport (pin match/mismatch, redirects, size cap, timeout) against a
+local HTTPS server. The guard cannot regress silently.
 
 ### 3. Replay resistance is bounded, and honestly labeled
 

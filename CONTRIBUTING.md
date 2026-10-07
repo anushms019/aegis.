@@ -32,7 +32,7 @@ Edit `src/*.js` or `styles.css`, then regenerate:
 
 ```bash
 npm run build           # node build.js → rewrites index.html
-npm test                # all four suites (classification, verification, integration, build sync)
+npm test                # all five suites (classification, verification, JWKS, integration, build sync)
 ```
 
 > **Never** rewrite `index.html` by hand with a string-based `String.replace`
@@ -63,7 +63,7 @@ npm test
   self-contained (no external requests), honesty markers are present, and the
   server guards side effects behind `require.main`.
 
-CI runs the same four suites plus a `git diff --exit-code` check on `index.html`
+CI runs the same five suites plus a `git diff --exit-code` check on `index.html`
 across Node 20/22/24. Please make sure they all pass locally before opening a PR.
 
 ## Commit messages

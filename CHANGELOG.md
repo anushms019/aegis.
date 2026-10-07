@@ -4,6 +4,80 @@ All notable changes to AEGIS are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 advisory (the project is not published to npm).
 
+## [3.0.0] — 2026-10-07
+
+The v3 release makes AEGIS deployable and integrable: standard metrics for
+existing observability stacks, infrastructure-as-code, a real out-of-band key
+resolver for rotating agents, and an interactive schema inspector for the
+WebMCP ledger.
+
+### Added — server
+
+- **`GET /metrics`** — Prometheus text exposition (0.0.4): request counts by
+  kind, verification pass/fail ratios by verdict, per-agent counts, derived
+  signal counters, a request-duration **histogram** (12 buckets, recorded from
+  real measured milliseconds in `emit()`), events-per-minute, open SSE
+  clients, counter-epoch uptime, and JWKS fetch results. The scrape path is in
+  `TELEMETRY_PATHS`, so scrapes never inflate the numbers they report.
+- **Background JWKS resolver** — the allowlisted remote path is now an
+  asynchronous key-fetcher:
+  - per-origin queue with dedupe: a burst of unknown keyids opens one socket
+    and never blocks a live request;
+  - **exponential backoff** per origin (1 s base → 5 min cap, ±20 % jitter)
+    with stale-if-error reuse of the last good document;
+  - **TLS SPKI pinning** (`JWKS_PINS`, per-origin, multiple pins for rollover,
+    base64 or hex) verified on the live peer certificate before any body byte
+    is accepted — fail closed on mismatch, WebPKI unchanged when unpinned;
+  - transport moved from `fetch()` to stdlib `https` with a no-reuse agent
+    (full handshake every time so the peer cert is always inspectable),
+    3xx refusal, mid-stream 64 KB cap, hard 3 s timeout, optional
+    `JWKS_CA_FILE` operator CA;
+  - periodic refresher re-queues cached origins past half their TTL (unref'd).
+  - Default-deny allowlist and private-host refusals are unchanged and still
+    gate before any socket work.
+- `HOST` is now configurable (`0.0.0.0` in containers; default stays
+  loopback-only for safe local runs).
+
+### Added — dashboard
+
+- **WebMCP schema inspector**: clicking (or Enter/Space on) any ledger row
+  opens a dialog with the tool's full request JSON-Schema beside the actual
+  payload and a **field-by-field payload diff** (expected vs actual,
+  match/violation verdict). Draft 2020-12 schemas are declared for all eight
+  registry tools; 422 rows drop a required field so the diff agrees with the
+  Result column; live rows get an inferred schema, labeled as such. Rows are
+  keyboard-operable, the dialog is `aria-modal` with focus management, and
+  Esc / backdrop click dismiss it.
+
+### Added — deployment
+
+- **Multi-stage `Dockerfile`** — build stage bundles the dashboard and runs the
+  full test suite (a broken image cannot be produced); runtime stage is a
+  non-root minimal Node image with a `HEALTHCHECK`.
+- **`docker-compose.yml`** — read-only rootfs, dropped capabilities,
+  no-new-privileges, healthcheck.
+- **`deploy/k8s/`** — Deployment (liveness `/api/health`, readiness
+  `/api/snapshot`, both telemetry paths so probes never pollute metrics),
+  Service, ConfigMap for `JWKS_ALLOWLIST`, kustomize-ready; non-root,
+  read-only rootfs, seccomp `RuntimeDefault`, resource requests/limits.
+
+### Changed
+
+- Test suite grew from 48 to **66 tests** across five suites (new
+  `tests/jwks.test.js`, plus metrics and inspector tests); CI runs all five.
+- `SECURITY.md` §2 rewritten for the new fetcher controls (backoff, pinning,
+  CA, background queue) with the honest statement of what is and is not
+  pinned.
+
+### Verified
+
+- Docker image builds with 66/66 tests inside the build stage; the container
+  reaches `healthy` while serving `/api/health`, `/api/snapshot`, and
+  `/metrics`; compose stack comes up healthy; all three Kubernetes manifests
+  pass `kubeconform -strict`.
+- Inspector checked in a live browser: valid rows report `SCHEMA VALID`, 422
+  rows flag the missing field, focus round-trips, console clean.
+
 ## [2.0.0] — 2026-10-04
 
 The v2 release moves AEGIS from a classified *mock* to a working observability
