@@ -5,6 +5,7 @@
  *   GET /events        → Server-Sent Events stream of classified requests
  *   GET /api/snapshot  → aggregate counters (JSON)
  *   GET /api/health    → readiness probe
+ *   GET /metrics       → Prometheus text exposition (v0.0.4)
  *   LOG_PATH=<file>    → optional: tail an nginx-style or JSON access log
  *                        and stream its parsed lines as events too
  *
@@ -554,6 +555,10 @@ function verifySignedRequest(req) {
 }
 
 /* ── counters ───────────────────────────────────────────── */
+/* Latency histogram buckets in seconds (Prometheus `le` boundaries).
+   Request duration is recorded in emit() from the real measured ms. */
+const LATENCY_BUCKETS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+
 const counters = {
   since: Date.now(),
   total: 0,
@@ -563,6 +568,7 @@ const counters = {
   byPath: {},
   recent: [], // timestamps for rate
   signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
+  latency: { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 },
 };
 
 function resetCounters() {
@@ -574,6 +580,7 @@ function resetCounters() {
   counters.byPath = {};
   counters.recent = [];
   counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  counters.latency = { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
 function eventsPerMin() {
@@ -597,6 +604,57 @@ function snapshot() {
   };
 }
 
+/* ── Prometheus text exposition (/metrics, format 0.0.4) ── */
+/* Label values are escaped per the exposition format: backslash,
+   double-quote, and newline. HELP text needs the same escaping. */
+function promEsc(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+}
+
+function renderMetrics() {
+  const L = [];
+  const metric = (name, help, type, lines) => {
+    L.push(`# HELP ${name} ${help}`);
+    L.push(`# TYPE ${name} ${type}`);
+    for (const line of lines) L.push(line);
+  };
+
+  metric("aegis_events_total", "Classified telemetry events by kind.", "counter",
+    Object.entries(counters.byKind).map(([k, v]) => `aegis_events_total{kind="${promEsc(k)}"} ${v}`));
+
+  metric("aegis_verifications_total", "RFC 9421 signature verification outcomes by verdict.", "counter",
+    Object.entries(counters.byVerdict).map(([k, v]) => `aegis_verifications_total{verdict="${promEsc(k)}"} ${v}`));
+
+  metric("aegis_agent_requests_total", "Requests attributed to a known agent.", "counter",
+    Object.entries(counters.byAgent).map(([k, v]) => `aegis_agent_requests_total{agent="${promEsc(k)}"} ${v}`));
+
+  metric("aegis_signals_total", "Derived risk-signal counts (IPI, trajectory anomaly, tool calls).", "counter",
+    [
+      `aegis_signals_total{signal="ipi"} ${counters.signals.ipi}`,
+      `aegis_signals_total{signal="trajad"} ${counters.signals.trajad}`,
+      `aegis_signals_total{signal="tool_call"} ${counters.signals.toolCalls}`,
+    ]);
+
+  const buckets = counters.latency.buckets;
+  const bucketLines = LATENCY_BUCKETS.map((le, i) =>
+    `aegis_request_duration_seconds_bucket{le="${le}"} ${buckets[i]}`);
+  bucketLines.push(`aegis_request_duration_seconds_bucket{le="+Inf"} ${counters.latency.count}`);
+  bucketLines.push(`aegis_request_duration_seconds_sum ${counters.latency.sum.toFixed(6)}`);
+  bucketLines.push(`aegis_request_duration_seconds_count ${counters.latency.count}`);
+  metric("aegis_request_duration_seconds", "Request handling latency in seconds.", "histogram", bucketLines);
+
+  metric("aegis_events_per_minute", "Events observed in the trailing 60 s window.", "gauge",
+    [`aegis_events_per_minute ${eventsPerMin()}`]);
+
+  metric("aegis_sse_clients", "Open SSE dashboard connections.", "gauge",
+    [`aegis_sse_clients ${clients.size}`]);
+
+  metric("aegis_uptime_seconds", "Seconds since the counter epoch (reset on resetCounters).", "gauge",
+    [`aegis_uptime_seconds ${((Date.now() - counters.since) / 1000).toFixed(3)}`]);
+
+  return L.join("\n") + "\n";
+}
+
 /* ── SSE ────────────────────────────────────────────────── */
 const clients = new Set();
 function broadcast(obj) {
@@ -610,6 +668,13 @@ function emit(ev) {
   counters.total++;
   counters.recent.push(ev.t);
   bump(counters.byKind, ev.kind);
+  // latency histogram (seconds), cumulative buckets as Prometheus expects
+  const sec = (Number(ev.ms) || 0) / 1000;
+  counters.latency.count++;
+  counters.latency.sum += sec;
+  for (let i = 0; i < LATENCY_BUCKETS.length; i++) {
+    if (sec <= LATENCY_BUCKETS[i]) counters.latency.buckets[i]++;
+  }
   if (ev.signed && ev.signed.verdict && ev.signed.verdict !== "none") bump(counters.byVerdict, ev.signed.verdict);
   if (ev.kind === "known" || ev.kind === "signed") bump(counters.byAgent, ev.agent.name);
   bump(counters.byPath, ev.path);
@@ -735,6 +800,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === "/metrics") {
+    // Prometheus text exposition format 0.0.4 — telemetry path, not counted
+    res.writeHead(200, {
+      "content-type": "text/plain; version=0.0.4; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(renderMetrics());
+    finish(200);
+    return;
+  }
+
   if (pathname === "/events") {
     res.writeHead(200, {
       "content-type": "text/event-stream",
@@ -768,7 +844,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const TELEMETRY_PATHS = new Set(["/events", "/api/snapshot", "/api/health"]);
+const TELEMETRY_PATHS = new Set(["/events", "/api/snapshot", "/api/health", "/metrics"]);
 
 /* heartbeat so proxies/browsers keep SSE open — only when run as a server */
 if (require.main === module) {
@@ -919,7 +995,7 @@ if (require.main === module) {
 
 /* exported for the test suite */
 module.exports = { classify, parseLogLine,
-  NGINX_RE, counters, snapshot, resetCounters,
+  NGINX_RE, counters, snapshot, resetCounters, renderMetrics, LATENCY_BUCKETS,
   signatureBase, addVerificationKey, loadJwksFile, server,
   verifySignedRequest, parseSignatureInput, parseSignatureHeader,
   fetchRemoteJwks, ensureRemoteKey, isPrivateHost, jwksAllowlist,

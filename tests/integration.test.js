@@ -141,6 +141,47 @@ test("static dashboard is served and its path counted", async () => {
   assert.equal(after.byPath["/index.html"] - (before.byPath["/index.html"] || 0), 1);
 });
 
+test("scraping /metrics returns Prometheus exposition without counting itself", async () => {
+  const before = snapshot().total;
+  const res = await fetch(base + "/metrics");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") || "", /text\/plain; version=0\.0\.4/);
+  const text = await res.text();
+  assert.match(text, /# TYPE aegis_events_total counter/);
+  assert.match(text, /# TYPE aegis_verifications_total counter/);
+  assert.match(text, /# TYPE aegis_request_duration_seconds histogram/);
+  assert.match(text, /aegis_request_duration_seconds_bucket\{le="\+Inf"\} \d+/);
+  assert.match(text, /aegis_request_duration_seconds_sum [\d.]+/);
+  assert.match(text, /aegis_events_per_minute \d+/);
+  assert.equal(snapshot().total, before, "metrics scrape must not bump event counters");
+});
+
+test("metrics counters advance with real traffic (pass/fail ratio + latency)", async () => {
+  const scrape = async () => {
+    const t = await (await fetch(base + "/metrics")).text();
+    const get = (re) => {
+      const m = t.match(re);
+      assert.ok(m, `metric missing in scrape: ${re}`);
+      return Number(m[1]);
+    };
+    return {
+      known: get(/aegis_events_total\{kind="known"\} (\d+)/),
+      valid: get(/aegis_verifications_total\{verdict="valid"\} (\d+)/),
+      invalid: get(/aegis_verifications_total\{verdict="invalid"\} (\d+)/),
+      count: get(/aegis_request_duration_seconds_count (\d+)/),
+      sum: get(/aegis_request_duration_seconds_sum ([\d.]+)/),
+    };
+  };
+  const before = await scrape();
+  await fetch(base + "/index.html", { headers: { "user-agent": "GPTBot/9.0" } });
+  await signedFetch("/index.html");
+  const after = await scrape();
+  assert.equal(after.known, before.known + 1, "known agent request counted");
+  assert.equal(after.valid, before.valid + 1, "verification pass counted");
+  assert.equal(after.count, before.count + 2, "both requests observed by latency histogram");
+  assert.ok(after.sum >= before.sum, "latency sum is monotonic");
+});
+
 test("SSE stream hydrates with a snapshot then broadcasts live events", async () => {
   sseRes = await fetch(base + "/events");
   assert.equal(sseRes.status, 200);
