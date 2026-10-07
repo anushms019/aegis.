@@ -126,3 +126,58 @@ test("escHtml neutralizes quotes as well as angle brackets", () => {
   assert.strictEqual(escHtml("'"), "&#39;");
   assert.strictEqual(escHtml(null), "—", "nullish fallback changed");
 });
+
+test("WebMCP schema inspector modal is wired into the dashboard", () => {
+  const html = read("index.html");
+  for (const marker of [
+    'id="mcp-modal"', 'role="dialog"', 'aria-modal="true"',
+    'id="mcp-modal-payload"', 'id="mcp-modal-schema"',
+    'id="mcp-modal-diff"', 'id="mcp-modal-close"', 'id="mcp-modal-summary"',
+  ]) {
+    assert.ok(html.includes(marker), `expected modal marker missing: ${marker}`);
+  }
+  const app = read("app.js");
+  for (const marker of ["MCP_SCHEMAS", "validateAgainstSchema", "inferMcpSchema", "registerMcpRow", "openMcpInspector"]) {
+    assert.ok(app.includes(marker), `expected inspector logic missing: ${app.slice(0, 0)}${marker}`);
+  }
+  assert.ok(read("styles.css").includes(".modal-backdrop"), "modal styles missing");
+});
+
+test("validateAgainstSchema passes conforming payloads and flags every violation class", () => {
+  const src = read("app.js");
+  const grab = (name) => {
+    const s = src.indexOf(`function ${name}`);
+    assert.ok(s !== -1, `${name} missing from bundle`);
+    const e = src.indexOf("\n}\n", s);
+    assert.ok(e > s, `${name} end not found`);
+    return src.slice(s, e + 3);
+  };
+  // the validator calls mcpTypeName — extract both (they are self-contained)
+  const validate = new Function(
+    grab("mcpTypeName") + "\n" + grab("validateAgainstSchema") +
+    "; return validateAgainstSchema;")();
+
+  const schema = {
+    type: "object", additionalProperties: false, required: ["q"],
+    properties: {
+      q: { type: "string", minLength: 1 },
+      n: { type: "integer", minimum: 1, maximum: 10 },
+      mode: { type: "string", enum: ["a", "b"] },
+      code: { type: "string", pattern: "^[A-Z]{3}$" },
+    },
+  };
+
+  const good = validate({ q: "hi", n: 5, mode: "a", code: "SFO" }, schema);
+  assert.equal(good.ok, true, JSON.stringify(good.findings));
+
+  const missing = validate({ n: 5 }, schema);
+  assert.equal(missing.ok, false, "absent required field must fail");
+  assert.ok(missing.findings.some((f) => f.path === "q" && !f.ok && f.actual === "(missing)"));
+
+  assert.equal(validate({ q: "hi", n: 2.5 }, schema).ok, false, "non-integer must violate integer type");
+  assert.equal(validate({ q: "hi", n: 99 }, schema).ok, false, "value above maximum must violate");
+  assert.equal(validate({ q: "hi", mode: "z" }, schema).ok, false, "value outside enum must violate");
+  assert.equal(validate({ q: "hi", code: "sfo" }, schema).ok, false, "pattern mismatch must violate");
+  assert.equal(validate({ q: "" }, schema).ok, false, "minLength violation must fail");
+  assert.equal(validate({ q: "hi", evil: 1 }, schema).ok, false, "additionalProperties:false must reject extras");
+});

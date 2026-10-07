@@ -371,6 +371,14 @@ function addMcpRowReal(ev) {
     cell(Math.round(ev.ms || 0) + " ms", "mono"),
     cell("—", "mono dim", "font-size:11px"),
   ]);
+  registerMcpRow(tr, {
+    source: "live", domain: ev.kind, tool: ev.path || "—",
+    payload: { ua: (ev.ua || "").slice(0, 40), method: ev.method, status: ev.status },
+    schema: null, // no registry contract for live traffic → inferred in the modal
+    schemaLabel: "inferred",
+    ok, result: ok ? "200 · structured" : String(ev.status),
+    latency: Math.round(ev.ms || 0) + " ms",
+  });
   const body = $("#mcp-body");
   if (!body) return;
   body.prepend(tr);
