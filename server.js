@@ -19,6 +19,7 @@
  */
 "use strict";
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("node:crypto");
@@ -121,8 +122,9 @@ function classify(req, source = "http") {
    Parses Signature-Input / Signature (structured fields), rebuilds the
    signature base exactly as RFC 9421 §2.5 defines it, and verifies it
    against locally loaded JWK keys (JWKS_PATH file or addVerificationKey).
-   No outbound fetches: keyid URLs are never dereferenced — that would be
-   an SSRF primitive (see SECURITY.md). Key resolution is explicit. */
+   Keyid URLs are NOT dereferenced by default: that would be an SSRF
+   primitive (see SECURITY.md). Operators may opt in via JWKS_ALLOWLIST
+   (+ optional JWKS_PINS) — key resolution stays explicit. */
 
 // Components a signature must cover for AEGIS to trust it (Web Bot Auth profile).
 const REQUIRED_COMPONENTS = ["@method", "@path", "@authority"];
@@ -344,22 +346,42 @@ function ensureJwksFresh() {
   }
 }
 
-/* ── remote JWKS resolution (allowlist-gated) ──────────────────────
+/* ── remote JWKS resolution (allowlist-gated background fetcher) ─────
    Default posture is still zero outbound requests: nothing is fetched
    unless the operator sets JWKS_ALLOWLIST. When set, only exact
    https:// origins on that list are contacted, for JWKS documents only:
      - exact origin match (no suffix matching, no redirects)
      - private/loopback/link-local literal addresses refused
      - bounded timeout + response size
-     - TTL cache and a per-origin rate limit
-   This is the deliberate, auditable widening of the SSRF guard: the
-   list is operator-controlled configuration, not request-controlled. */
+     - TTL cache, per-origin rate limit, and exponential backoff
+     - optional TLS SPKI pinning (JWKS_PINS) verified before the body
+       is parsed or cached — a pin mismatch fails closed
+   Fetches run on a background queue (queueJwksFetch) so verification
+   never waits on a socket; failed origins are retried with exponential
+   backoff + jitter (1 s → 5 min cap). The list is operator-controlled
+   configuration, not request-controlled. */
 const REMOTE_JWKS_TTL_MS = Number(process.env.JWKS_TTL_MS) || 10 * 60 * 1000;
 const REMOTE_JWKS_MAX_BYTES = 64 * 1024;
 const REMOTE_JWKS_TIMEOUT_MS = Number(process.env.JWKS_TIMEOUT_MS) || 3000;
 const REMOTE_JWKS_MAX_PER_MIN = Number(process.env.JWKS_RATE_LIMIT) || 6;
-const remoteJwksCache = new Map(); // origin → { doc, at }
+const REMOTE_JWKS_BACKOFF_BASE_MS = Number(process.env.JWKS_BACKOFF_BASE_MS) || 1000;
+const REMOTE_JWKS_BACKOFF_CAP_MS = Number(process.env.JWKS_BACKOFF_CAP_MS) || 5 * 60 * 1000;
+const remoteJwksCache = new Map(); // origin → { doc, at, url }
 const remoteJwksHits = new Map();  // origin → [timestamps]
+const remoteJwksBackoff = new Map(); // origin → { fails, nextAt }
+
+/* Dedicated agent: no connection reuse, no session tickets — every JWKS
+   fetch performs a full TLS handshake so the peer certificate (and thus
+   the SPKI pin) is always available for inspection. */
+const jwksAgent = new https.Agent({ keepAlive: false, maxCachedSessions: 0 });
+
+/* Optional operator-supplied CA bundle (PEM) for origins under a private
+   PKI. Read once at startup; a missing/unreadable file means system roots
+   only. Never attacker-controlled — process configuration like JWKS_PINS. */
+let jwksCaPem = null;
+if (process.env.JWKS_CA_FILE) {
+  try { jwksCaPem = fs.readFileSync(process.env.JWKS_CA_FILE, "utf8"); } catch (_) { jwksCaPem = null; }
+}
 
 function jwksAllowlist() {
   return String(process.env.JWKS_ALLOWLIST || "")
@@ -391,45 +413,227 @@ function rateAllows(origin) {
   return true;
 }
 
+/* ── exponential backoff (per origin) ─────────────────────── */
+/* fails=1 → base, doubling per failure, capped, ±20 % jitter.
+   `rand` is injectable so tests can pin the exact delay. */
+function jwksBackoffDelay(fails, rand = Math.random) {
+  const exp = Math.min(REMOTE_JWKS_BACKOFF_CAP_MS,
+    REMOTE_JWKS_BACKOFF_BASE_MS * Math.pow(2, Math.max(0, fails - 1)));
+  const jitter = 0.8 + rand() * 0.4; // 80 %–120 %
+  return Math.min(REMOTE_JWKS_BACKOFF_CAP_MS, Math.round(exp * jitter));
+}
+
+function recordJwksFailure(origin) {
+  const prev = remoteJwksBackoff.get(origin) || { fails: 0, nextAt: 0 };
+  const fails = prev.fails + 1;
+  remoteJwksBackoff.set(origin, { fails, nextAt: Date.now() + jwksBackoffDelay(fails) });
+}
+
+function recordJwksSuccess(origin) {
+  remoteJwksBackoff.delete(origin);
+}
+
+/* ── TLS SPKI pinning (JWKS_PINS, opt-in) ─────────────────── */
+/* Format: JWKS_PINS="https://keys.example.com=sha256/<base64>|<hex>,…"
+   Multiple pins per origin are separated by "|" (key rollover window).
+   Origins without a pin keep standard WebPKI validation only — pinning
+   is an *additional* operator-controlled trust anchor, never a bypass. */
+function jwksPins() {
+  const out = new Map();
+  for (const entry of String(process.env.JWKS_PINS || "").split(",")) {
+    const eq = entry.indexOf("=");
+    if (eq === -1) continue;
+    const origin = entry.slice(0, eq).trim();
+    const pins = entry.slice(eq + 1).split("|")
+      .map((p) => p.trim().replace(/^sha256[\/=]/, "")).filter(Boolean);
+    if (origin && pins.length) out.set(origin, pins);
+  }
+  return out;
+}
+
+/* sha256 digest over the certificate's SubjectPublicKeyInfo DER. */
+function spkiDigest(certRaw) {
+  const x = new crypto.X509Certificate(certRaw);
+  const der = x.publicKey.export({ type: "spki", format: "der" });
+  return crypto.createHash("sha256").update(der).digest();
+}
+
+/* No pin configured for the origin → pass (WebPKI still enforced).
+   Pin configured but no peer certificate → fail closed. */
+function checkJwksPin(origin, spkiSha256) {
+  const pins = jwksPins().get(origin);
+  if (!pins) return true;
+  if (!spkiSha256) return false;
+  const b64 = spkiSha256.toString("base64");
+  const hex = spkiSha256.toString("hex");
+  return pins.includes(b64) || pins.includes(hex);
+}
+
+/* One TLS GET with redirect refusal, size cap, hard timeout, and pin
+   verification *before* the body is handed back to the caller. Never
+   throws a raw fetch error — rejects with Error("jwks:<reason>"). */
+function httpsGetJwks(u) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, val) => {
+      if (settled) return;
+      settled = true;
+      err ? reject(err) : resolve(val);
+    };
+    let req;
+    try {
+      req = https.request(u, {
+        method: "GET",
+        agent: jwksAgent,
+        headers: { accept: "application/json", "user-agent": "aegis-jwks/1.0" },
+        timeout: REMOTE_JWKS_TIMEOUT_MS,
+        signal: AbortSignal.timeout(REMOTE_JWKS_TIMEOUT_MS),
+        ...(jwksCaPem ? { ca: jwksCaPem } : {}),
+      }, (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 300 && status < 400) { done(new Error("jwks:redirect refused")); res.destroy(); return; }
+        if (status !== 200) { done(new Error("jwks:status " + status)); res.destroy(); return; }
+        // pin check on the live peer certificate, before any body bytes
+        // are accepted — a mismatch tears the socket down immediately
+        let spki = null;
+        try {
+          const cert = res.socket.getPeerCertificate();
+          if (cert && cert.raw && cert.raw.length) spki = spkiDigest(cert.raw);
+        } catch (_) { spki = null; }
+        if (!checkJwksPin(u.origin, spki)) {
+          done(new Error("jwks:pin mismatch"));
+          req.destroy();
+          return;
+        }
+        const chunks = [];
+        let size = 0;
+        res.on("data", (c) => {
+          size += c.length;
+          if (size > REMOTE_JWKS_MAX_BYTES) { done(new Error("jwks:size cap exceeded")); res.destroy(); return; }
+          chunks.push(c);
+        });
+        res.on("end", () => done(null, { text: Buffer.concat(chunks).toString("utf8"), spki }));
+        res.on("error", (e) => done(new Error("jwks:" + (e.message || "socket error"))));
+      });
+    } catch (e) {
+      done(new Error("jwks:" + (e.message || "request build failed")));
+      return;
+    }
+    req.on("timeout", () => { done(new Error("jwks:timeout")); req.destroy(); });
+    req.on("error", (e) => {
+      // AbortSignal.timeout surfaces as "The operation was aborted" —
+      // normalize so operators (and metrics) see the real reason
+      const aborted = e && (e.name === "TimeoutError" || e.name === "AbortError");
+      done(new Error(aborted ? "jwks:timeout" : "jwks:" + (e.message || "request error")));
+    });
+    req.end();
+  });
+}
+
 /* Returns a parsed JWKS document, or null. Never throws. */
 async function fetchRemoteJwks(rawUrl) {
   let u;
-  try { u = new URL(rawUrl); } catch (_) { return null; }
-  if (u.protocol !== "https:") return null;
-  if (!jwksAllowlist().includes(u.origin)) return null;   // exact origin, default-deny
-  if (isPrivateHost(u.hostname)) return null;
+  try { u = new URL(rawUrl); } catch (_) { counters.jwks.denied++; return null; }
+  if (u.protocol !== "https:") { counters.jwks.denied++; return null; }
+  if (!jwksAllowlist().includes(u.origin)) { counters.jwks.denied++; return null; } // exact origin, default-deny
+  if (isPrivateHost(u.hostname)) { counters.jwks.denied++; return null; }
   const cached = remoteJwksCache.get(u.origin);
   if (cached && Date.now() - cached.at < REMOTE_JWKS_TTL_MS) return cached.doc;
+  const bo = remoteJwksBackoff.get(u.origin);
+  if (bo && Date.now() < bo.nextAt) {
+    counters.jwks.backoff++;
+    return cached ? cached.doc : null;                    // in backoff: stale-else-deny, no socket
+  }
   if (!rateAllows(u.origin)) {
-    return cached ? cached.doc : null;                   // over limit: reuse, else deny
+    counters.jwks.ratelimited++;
+    return cached ? cached.doc : null;                    // over limit: reuse, else deny
   }
   try {
-    const res = await fetch(u, {
-      redirect: "error",
-      signal: AbortSignal.timeout(REMOTE_JWKS_TIMEOUT_MS),
-      headers: { accept: "application/json", "user-agent": "aegis-jwks/1.0" },
-    });
-    if (!res.ok) return null;
-    const text = await res.text();
-    if (text.length > REMOTE_JWKS_MAX_BYTES) return null;
+    const { text } = await httpsGetJwks(u);
     const doc = JSON.parse(text);
-    if (!doc || !Array.isArray(doc.keys)) return null;
-    remoteJwksCache.set(u.origin, { doc, at: Date.now() });
+    if (!doc || !Array.isArray(doc.keys)) throw new Error("not a JWKS document");
+    remoteJwksCache.set(u.origin, { doc, at: Date.now(), url: rawUrl });
+    recordJwksSuccess(u.origin);
+    counters.jwks.ok++;
     return doc;
   } catch (_) {
-    return null;
+    counters.jwks.error++;
+    recordJwksFailure(u.origin);                          // exponential backoff from here
+    return cached ? cached.doc : null;                    // stale-if-error
   }
+}
+
+/* ── background fetch queue ──────────────────────────────── */
+/* Verification signals a missing keyid by enqueuing here; the fetch
+   itself happens off the request path, serialized per origin and
+   deduplicated so a burst of unknown-kid requests opens one socket. */
+const jwksQueue = [];             // raw URLs waiting to be fetched
+const jwksQueued = new Set();     // origins queued or in flight
+let jwksDraining = false;
+
+function queueJwksFetch(rawUrl) {
+  let u;
+  try { u = new URL(rawUrl); } catch (_) { return false; }
+  if (u.protocol !== "https:") return false;
+  if (!jwksAllowlist().includes(u.origin)) return false;  // same gates, before queueing
+  if (isPrivateHost(u.hostname)) return false;
+  if (jwksQueued.has(u.origin)) return false;             // already queued / in flight
+  jwksQueued.add(u.origin);
+  jwksQueue.push(rawUrl);
+  setImmediate(drainJwksQueue);
+  return true;
+}
+
+async function drainJwksQueue() {
+  if (jwksDraining) return;
+  jwksDraining = true;
+  try {
+    while (jwksQueue.length) {
+      const rawUrl = jwksQueue.shift();
+      let origin = null;
+      try { origin = new URL(rawUrl).origin; } catch (_) { /* skip */ }
+      try { const doc = await fetchRemoteJwks(rawUrl); if (doc) loadJwksIntoRing(doc); } catch (_) { /* never throws */ }
+      if (origin) jwksQueued.delete(origin);
+    }
+  } finally {
+    jwksDraining = false;
+  }
+}
+
+/* Periodic background refresher: re-queues every cached origin whose
+   document is past half its TTL, so keys rotate without live traffic.
+   Timer is unref'd — it never keeps the process (or a test) alive. */
+let jwksRefresher = null;
+function startJwksRefresher(intervalMs) {
+  if (jwksRefresher) return jwksRefresher;
+  const iv = intervalMs || Math.max(60000, Math.floor(REMOTE_JWKS_TTL_MS / 2));
+  jwksRefresher = setInterval(() => {
+    const half = REMOTE_JWKS_TTL_MS / 2;
+    for (const entry of remoteJwksCache.values()) {
+      if (entry.url && Date.now() - entry.at > half) queueJwksFetch(entry.url);
+    }
+  }, iv);
+  if (typeof jwksRefresher.unref === "function") jwksRefresher.unref();
+  return jwksRefresher;
+}
+
+function stopJwksRefresher() {
+  if (jwksRefresher) clearInterval(jwksRefresher);
+  jwksRefresher = null;
 }
 
 /* Resolve a keyid that is an https URL, if (and only if) its origin is
    allowlisted. Adds any usable keys to the ring. Returns true on load. */
-async function ensureRemoteKey(keyid) {
-  if (!keyid || typeof keyid !== "string" || !/^https:\/\//.test(keyid)) return false;
-  const doc = await fetchRemoteJwks(keyid);
-  if (!doc) return false;
+function loadJwksIntoRing(doc) {
+  if (!doc || !Array.isArray(doc.keys)) return 0;
   let n = 0;
   for (const jwk of doc.keys) { try { addVerificationKey(jwk); n++; } catch (_) { /* skip */ } }
-  return n > 0;
+  return n;
+}
+
+async function ensureRemoteKey(keyid) {
+  if (!keyid || typeof keyid !== "string" || !/^https:\/\//.test(keyid)) return false;
+  return loadJwksIntoRing(await fetchRemoteJwks(keyid)) > 0;
 }
 
 /* Algorithm registry (RFC 9421 §6.2.2 + JOSE aliases for interop). */
@@ -497,7 +701,7 @@ function verifySignedRequest(req) {
   if (preIn && jwksAllowlist().length) {
     for (const e of preIn) {
       const k = e.params && e.params.keyid;
-      if (k && !verificationKeys.has(k)) ensureRemoteKey(k); // fire-and-forget warm-up
+      if (k && !verificationKeys.has(k)) queueJwksFetch(k); // background warm-up, off the request path
     }
   }
   const entries = preIn;
@@ -528,8 +732,9 @@ function verifySignedRequest(req) {
     const kid = entry.params.keyid;
     let rec = kid ? verificationKeys.get(kid) : null;
     if (!rec && kid && jwksAllowlist().length) {
-      // sync fast-path: already-cached keys are attached synchronously by
-      // warmRemoteJwks(); a cache miss here stays unresolved this request.
+      // sync fast-path: keys fetched by the background queue are attached
+      // as soon as its fetch resolves; a miss here stays unresolved for
+      // this request and is retried automatically on the next one.
       rec = verificationKeys.get(kid);
     }
     if (!rec) {
@@ -568,6 +773,7 @@ const counters = {
   byPath: {},
   recent: [], // timestamps for rate
   signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
+  jwks: { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 }, // remote key fetches by result
   latency: { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 },
 };
 
@@ -580,6 +786,7 @@ function resetCounters() {
   counters.byPath = {};
   counters.recent = [];
   counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  counters.jwks = { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 };
   counters.latency = { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
@@ -642,6 +849,9 @@ function renderMetrics() {
   bucketLines.push(`aegis_request_duration_seconds_sum ${counters.latency.sum.toFixed(6)}`);
   bucketLines.push(`aegis_request_duration_seconds_count ${counters.latency.count}`);
   metric("aegis_request_duration_seconds", "Request handling latency in seconds.", "histogram", bucketLines);
+
+  metric("aegis_jwks_fetches_total", "Remote JWKS fetch attempts by result.", "counter",
+    Object.entries(counters.jwks).map(([k, v]) => `aegis_jwks_fetches_total{result="${promEsc(k)}"} ${v}`));
 
   metric("aegis_events_per_minute", "Events observed in the trailing 60 s window.", "gauge",
     [`aegis_events_per_minute ${eventsPerMin()}`]);
@@ -978,6 +1188,11 @@ if (require.main === module) {
     ensureJwksFresh();
     console.log(`[keys] JWKS keyring: ${process.env.JWKS_PATH} → ${verificationKeys.size} key(s)`);
   }
+  if (jwksAllowlist().length) {
+    startJwksRefresher();
+    console.log(`[keys] remote JWKS allowlist: ${jwksAllowlist().join(", ")} (background refresher on)`);
+    if (jwksPins().size) console.log(`[keys] TLS SPKI pins configured for ${jwksPins().size} origin(s)`);
+  }
   server.listen(PORT, HOST, () => {
     console.log(`AEGIS capture server → http://${HOST}:${PORT}`);
     console.log(`  SSE stream:   http://${HOST}:${PORT}/events`);
@@ -999,4 +1214,7 @@ module.exports = { classify, parseLogLine,
   signatureBase, addVerificationKey, loadJwksFile, server,
   verifySignedRequest, parseSignatureInput, parseSignatureHeader,
   fetchRemoteJwks, ensureRemoteKey, isPrivateHost, jwksAllowlist,
+  queueJwksFetch, jwksBackoffDelay, recordJwksFailure, recordJwksSuccess,
+  jwksPins, checkJwksPin, startJwksRefresher, stopJwksRefresher,
+  remoteJwksCache, remoteJwksBackoff, httpsGetJwks, jwksQueued,
 };
