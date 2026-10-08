@@ -1,6 +1,6 @@
 {
   "name": "aegis",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "AEGIS — Global AI Agent Observability Console. Zero-dependency capture server + live dashboard that classifies signed (RFC 9421), known, shadow, tool, and human traffic.",
   "main": "server.js",
   "scripts": {
