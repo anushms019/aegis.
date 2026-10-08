@@ -133,8 +133,10 @@ npm test        # 66 tests, five suites
 | `tests/server.test.js` | classification contract (known UA matrix, shadow confidence, tool-vs-shadow regressions), nginx/JSON log parsing |
 | `tests/build.test.js` | `index.html` byte-synced to its sources, `src/` ↔ `app.js` bundle round-trip, self-contained page, honesty markers, remote-JWKS SSRF guard (default-deny), WebMCP inspector + schema validator |
 
-CI runs the suite on Node 20, 22, and 24, syntax-checks every source file, and fails if
-a committed `index.html` drifts from `styles.css` / `src/*.js`.
+CI runs the suite on Node 20, 22, and 24, syntax-checks every source file,
+fails if a committed `index.html` drifts from `styles.css` / `src/*.js`, and
+boots the server headless to run the demo traffic generator — the build fails
+if `/metrics` does not account for every fired request.
 
 ## Project structure
 

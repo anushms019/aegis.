@@ -18,7 +18,8 @@
  *
  * Finally it re-scrapes GET /metrics and diffs against a baseline captured
  * before the burst, proving the Prometheus counters account for every
- * fired request (extra traffic only ever adds to the delta).
+ * fired request (extra traffic only ever adds to the delta). A shortfall
+ * exits non-zero so CI and wrapper scripts can gate on it.
  */
 "use strict";
 const crypto = require("node:crypto");
@@ -214,10 +215,17 @@ async function checkScrape(baseline, tally) {
     const note = ok && c.delta > c.want ? ` (≥, +${c.delta - c.want} from other traffic)` : "";
     console.log(`[demo] scrape ${ok ? "ok  " : "FAIL"}  ${c.label.padEnd(18)} delta ${String(c.delta).padStart(3)} ≥ fired ${c.want}${note}`);
   }
-  console.log(failed === 0
-    ? "[demo] scrape check PASSED — /metrics accounts for every fired request."
-    : `[demo] scrape check FAILED — ${failed} counter(s) under-counted.`);
-  if (!baseline) console.log("[demo] (no baseline was available; deltas shown against zero)");
+  if (failed === 0) {
+    console.log("[demo] scrape check PASSED — /metrics accounts for every fired request.");
+    if (!baseline) console.log("[demo] (no baseline was available; deltas shown against zero)");
+  } else {
+    // exit non-zero so CI and wrapper scripts can gate on the accounting
+    console.log(`[demo] scrape check FAILED — ${failed} counter(s) under-counted.`);
+    process.exitCode = 1;
+  }
 }
 
-main();
+main().catch((e) => {
+  console.error("[demo] aborted:", e);
+  process.exitCode = 1;
+});

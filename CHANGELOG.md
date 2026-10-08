@@ -11,7 +11,14 @@ advisory (the project is not published to npm).
 - **`scripts/demo-traffic.js` now verifies its own scrape**: it captures
   `GET /metrics` before firing, diffs it after, and requires the delta to
   cover every verdict and traffic kind it sent — a shortfall prints `FAIL`
-  per counter. Extra delta (e.g. an open dashboard) is tolerated and noted.
+  per counter **and exits non-zero**, so CI and wrapper scripts can gate on
+  it. Extra delta (e.g. an open dashboard) is tolerated and noted.
+- **CI boots the server headless and runs the demo**: a new workflow step
+  starts `server.js`, waits for `/api/health`, runs the traffic generator,
+  and fails the build on a non-zero exit or a missing `scrape check PASSED`
+  line — the metrics accounting is now exercised on every push across
+  Node 20/22/24. The syntax check also covers `scripts/*.js`, which was
+  previously unchecked.
 
 ### Changed
 

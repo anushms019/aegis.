@@ -72,7 +72,9 @@ npm test
   behind `require.main`.
 
 CI runs the same five suites plus a `git diff --exit-code` check on `index.html`
-across Node 20/22/24. Please make sure they all pass locally before opening a PR.
+across Node 20/22/24, then starts the server and runs `scripts/demo-traffic.js`
+headless — the build fails if `/metrics` does not account for every fired
+request. Please make sure they all pass locally before opening a PR.
 
 ## Commit messages
 

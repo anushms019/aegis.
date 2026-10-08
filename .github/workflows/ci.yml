@@ -22,10 +22,38 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Syntax check
-        run: node --check server.js && node --check app.js && node --check build.js
+        run: |
+          node --check server.js && node --check app.js && node --check build.js
+          for f in scripts/*.js; do node --check "$f"; done
 
       - name: Run test suite
         run: node --test tests/server.test.js tests/verify.test.js tests/jwks.test.js tests/integration.test.js tests/build.test.js
+
+      - name: Demo end-to-end (fails if /metrics under-counts)
+        shell: bash
+        run: |
+          JWKS_PATH=.demo-jwks.json node server.js >server.log 2>&1 &
+          SRV_PID=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8788/api/health >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          if ! curl -fsS http://127.0.0.1:8788/api/health >/dev/null 2>&1; then
+            echo "::error::server never became healthy"
+            cat server.log
+            exit 1
+          fi
+          if ! node scripts/demo-traffic.js | tee demo.log; then
+            echo "::error::demo traffic generator failed"
+            cat server.log
+            exit 1
+          fi
+          if ! grep -q "scrape check PASSED" demo.log; then
+            echo "::error::/metrics scrape accounting did not pass"
+            cat server.log
+            exit 1
+          fi
+          kill "$SRV_PID" 2>/dev/null || true
 
       - name: Verify index.html is in sync with sources
         run: |
