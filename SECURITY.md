@@ -88,6 +88,30 @@ lines are ignored, never thrown (covered by tests). Log-sourced events are
 classified without the live-socket browser-claim heuristic, because access logs do
 not record the headers it inspects.
 
+### 6. `/metrics` is telemetry, not an API
+
+`GET /metrics` serves Prometheus text exposition of aggregate counters:
+events by kind, verification outcomes by verdict, per-agent counts, derived
+signal totals, a request-duration histogram, and JWKS fetch results. Its
+posture:
+
+- **Self-excluding** — the scrape path is in `TELEMETRY_PATHS`, so fetching
+  `/metrics` (or health/snapshot probes) never increments the counters it
+  reports; a scraper cannot inflate what it observes.
+- **No captured content** — labels are bounded enums produced by the
+  classifier (`kind`, `verdict`, `agent`, `signal`). Paths, IPs, headers,
+  bodies, and signature material are never labels, so scraping cannot
+  exfiltrate individual captured requests. JWKS results are counted by
+  outcome only, never by origin URL.
+- **No authentication, like the whole console** — the server binds
+  `127.0.0.1` by default. Publishing it (`HOST=0.0.0.0`, containers, k8s
+  Service) publishes the dashboard and metrics together: anyone who can reach
+  the port sees traffic shape and verdict pass/fail ratios. Place it behind
+  your reverse proxy, network policy, or scraper ACL.
+
+`tests/integration.test.js` locks the exposition format and asserts a scrape
+does not bump event counters.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the repository, or email the maintainer via

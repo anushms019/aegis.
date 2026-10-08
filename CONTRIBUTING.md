@@ -55,13 +55,21 @@ npm test
   construction, legacy `:component` normalization, algorithm registry, JWKS
   keyring handling, and the fail-closed policy (unknown `kid` → `unresolved`,
   never `valid`).
+- `tests/jwks.test.js` — the remote-JWKS fetcher: backoff math, `JWKS_PINS`
+  parsing and fail-closed pin verification, background-queue gating and
+  dedupe, and the live stdlib-HTTPS transport (pin match/mismatch, redirect
+  refusal, mid-stream size cap, timeout) against a local HTTPS server with a
+  test-only CA (`tests/fixtures/`).
 - `tests/integration.test.js` — spins up the real HTTP server on an ephemeral
   port: verdict counters move on signed traffic, SSE hydrates late readers and
-  broadcasts live events. Also asserts the server makes **no outbound
+  broadcasts live events, and `/metrics` renders Prometheus exposition without
+  counting its own scrape. Also asserts the server makes **no outbound
   requests** (SSRF guard).
 - `tests/build.test.js` — `index.html` is in sync with the sources, the page is
-  self-contained (no external requests), honesty markers are present, and the
-  server guards side effects behind `require.main`.
+  self-contained (no external requests), honesty markers are present, the
+  remote-JWKS path is default-deny behind the allowlist, the WebMCP inspector
+  and its schema validator are wired in, and the server guards side effects
+  behind `require.main`.
 
 CI runs the same five suites plus a `git diff --exit-code` check on `index.html`
 across Node 20/22/24. Please make sure they all pass locally before opening a PR.

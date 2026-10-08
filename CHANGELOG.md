@@ -4,6 +4,32 @@ All notable changes to AEGIS are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 advisory (the project is not published to npm).
 
+## [Unreleased]
+
+### Added
+
+- **`scripts/demo-traffic.js` now verifies its own scrape**: it captures
+  `GET /metrics` before firing, diffs it after, and requires the delta to
+  cover every verdict and traffic kind it sent — a shortfall prints `FAIL`
+  per counter. Extra delta (e.g. an open dashboard) is tolerated and noted.
+
+### Changed
+
+- `package.json` version bumped from 1.0.0 to **3.0.0** to match this
+  changelog (the package is advisory — AEGIS is not published to npm).
+- `CONTRIBUTING.md` test list now documents all five suites — the missing
+  `tests/jwks.test.js` bullet was added and the `integration`/`build` bullets
+  refreshed for `/metrics` and the default-deny/inspector assertions.
+
+### Security
+
+- `SECURITY.md` gained **§6** documenting the `/metrics` posture:
+  self-excluding telemetry path, bounded low-cardinality labels (no paths,
+  IPs, headers, or signature material ever become labels; JWKS results count
+  outcomes, not origin URLs), and the no-authentication stance — binding
+  `HOST=0.0.0.0` publishes dashboard and metrics together, so front it with a
+  proxy or network policy.
+
 ## [3.0.0] — 2026-10-07
 
 The v3 release makes AEGIS deployable and integrable: standard metrics for
