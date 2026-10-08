@@ -15,6 +15,10 @@
  *
  * The shadow burst is intentionally large enough to trip the dashboard's
  * burst detector.
+ *
+ * Finally it re-scrapes GET /metrics and diffs against a baseline captured
+ * before the burst, proving the Prometheus counters account for every
+ * fired request (extra traffic only ever adds to the delta).
  */
 "use strict";
 const crypto = require("node:crypto");
@@ -97,6 +101,25 @@ function rawHit(p, headers = {}) {
   });
 }
 
+/* ── Prometheus scrape helpers ─────────────────────────────── */
+async function scrapeMetrics() {
+  try {
+    const res = await fetch(`${BASE}/metrics`);
+    return res.ok ? await res.text() : null;
+  } catch { return null; }
+}
+
+/* Pull one labeled counter out of the exposition text without regex
+ * escaping headaches: match the exact `name{label="v"} value` line. */
+function metricValue(text, name, labelKey, labelVal) {
+  if (!text) return 0;
+  const want = `${name}{${labelKey}="${labelVal}"} `;
+  for (const line of text.split("\n")) {
+    if (line.startsWith(want)) return Number(line.slice(want.length)) || 0;
+  }
+  return 0;
+}
+
 async function main() {
   try {
     const h = await (await fetch(`${BASE}/api/health`)).json();
@@ -105,6 +128,7 @@ async function main() {
     console.error(`[demo] cannot reach ${BASE} — start the server first:\n  JWKS_PATH=.demo-jwks.json node server.js`);
     process.exit(1);
   }
+  const baseline = await scrapeMetrics(); // null on servers without /metrics
   console.log(`[demo] firing traffic at ${BASE} …`);
 
   const tally = { valid: 0, invalid: 0, unresolved: 0, known: 0, shadow: 0, tool: 0, human: 0 };
@@ -153,6 +177,47 @@ async function main() {
 
   console.log("[demo] done:", JSON.stringify(tally));
   console.log("[demo] open the dashboard — expect 6 valid, 3 invalid, 3 unresolved signatures and a shadow-burst banner.");
+  await checkScrape(baseline, tally);
+}
+
+/* Prove the scrape reflects what we just fired: capture /metrics before
+ * the burst, diff it after, and require the delta to cover every category.
+ * Extra delta is allowed (other traffic, e.g. an open dashboard), a shortfall
+ * is a real accounting bug. */
+async function checkScrape(baseline, tally) {
+  const after = await scrapeMetrics();
+  if (!after) {
+    console.log("[demo] /metrics not reachable — scrape check skipped.");
+    return;
+  }
+  const signed = tally.valid + tally.invalid + tally.unresolved;
+  const expect = [
+    ["verdict", "valid", tally.valid],
+    ["verdict", "invalid", tally.invalid],
+    ["verdict", "unresolved", tally.unresolved],
+  ].map(([k, v, n]) => ({
+    label: `verdict=${v}`,
+    delta: metricValue(after, "aegis_verifications_total", k, v) - metricValue(baseline, "aegis_verifications_total", k, v),
+    want: n,
+  })).concat(
+    [["signed", signed], ["shadow", tally.shadow], ["known", tally.known], ["tool", tally.tool], ["human", tally.human]]
+      .map(([k, n]) => ({
+        label: `kind=${k}`,
+        delta: metricValue(after, "aegis_events_total", "kind", k) - metricValue(baseline, "aegis_events_total", "kind", k),
+        want: n,
+      }))
+  );
+  let failed = 0;
+  for (const c of expect) {
+    const ok = c.delta >= c.want;
+    if (!ok) failed++;
+    const note = ok && c.delta > c.want ? ` (≥, +${c.delta - c.want} from other traffic)` : "";
+    console.log(`[demo] scrape ${ok ? "ok  " : "FAIL"}  ${c.label.padEnd(18)} delta ${String(c.delta).padStart(3)} ≥ fired ${c.want}${note}`);
+  }
+  console.log(failed === 0
+    ? "[demo] scrape check PASSED — /metrics accounts for every fired request."
+    : `[demo] scrape check FAILED — ${failed} counter(s) under-counted.`);
+  if (!baseline) console.log("[demo] (no baseline was available; deltas shown against zero)");
 }
 
 main();
