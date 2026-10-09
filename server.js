@@ -777,6 +777,7 @@ const counters = {
   signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
   jwks: { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 }, // remote key fetches by result
   authFail: { unauthorized: 0, forbidden: 0 }, // auth refusals (only when AEGIS_AUTH_USERS set)
+  otlp: { ok: 0, error: 0, dropped: 0 }, // OTLP span-batch exports (only when OTLP_ENDPOINT set)
   latency: { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 },
 };
 
@@ -791,6 +792,7 @@ function resetCounters() {
   counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
   counters.jwks = { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 };
   counters.authFail = { unauthorized: 0, forbidden: 0 };
+  counters.otlp = { ok: 0, error: 0, dropped: 0 };
   counters.latency = { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
@@ -863,6 +865,13 @@ function renderMetrics() {
       `aegis_auth_failures_total{result="forbidden"} ${counters.authFail.forbidden}`,
     ]);
 
+  metric("aegis_otlp_exports_total", "OTLP/HTTP span batch export results (ok / error / dropped).", "counter",
+    [
+      `aegis_otlp_exports_total{result="ok"} ${counters.otlp.ok}`,
+      `aegis_otlp_exports_total{result="error"} ${counters.otlp.error}`,
+      `aegis_otlp_exports_total{result="dropped"} ${counters.otlp.dropped}`,
+    ]);
+
   metric("aegis_signals_total", "Derived risk-signal counts (IPI, trajectory anomaly, tool calls).", "counter",
     [
       `aegis_signals_total{signal="ipi"} ${counters.signals.ipi}`,
@@ -891,6 +900,125 @@ function renderMetrics() {
     [`aegis_uptime_seconds ${((Date.now() - counters.since) / 1000).toFixed(3)}`]);
 
   return L.join("\n") + "\n";
+}
+
+/* ── OTLP/HTTP trace exporter (optional) ──────────────────────
+   OTLP_ENDPOINT=http://localhost:4318 → every classified event is
+   exported as a server span (OTLP/HTTP JSON, POST <endpoint>/v1/traces)
+   so standard backends (Jaeger, Datadog, any OTel collector) can ingest
+   AEGIS traffic alongside the custom SSE stream. The endpoint is
+   operator configuration, never request-controlled; no redirects;
+   bounded queue (drop-oldest) flushed in batches of 32 spans or every
+   OTLP_FLUSH_MS (default 3 s), 3 s hard timeout, fire-and-forget.
+   gRPC would require a dependency this project does not take on. */
+const OTLP_BATCH = 32;
+const OTLP_QUEUE_CAP = 1024;
+const OTLP_TIMEOUT_MS = 3000;
+const otlpQueue = [];
+let otlpTimer = null, otlpRaw, otlpUrl;
+
+function otlpEndpoint() {
+  const raw = process.env.OTLP_ENDPOINT || "";
+  if (raw !== otlpRaw) {
+    otlpRaw = raw;
+    otlpUrl = null;
+    otlpQueue.length = 0; // spans queued for a previous config are discarded
+    if (raw) {
+      try {
+        const u = new URL(raw);
+        if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("scheme");
+        const base = (u.origin + u.pathname).replace(/\/+$/, "");
+        otlpUrl = new URL(base.endsWith("/v1/traces") ? base : base + "/v1/traces");
+      } catch (_) {
+        console.warn("[otlp] invalid OTLP_ENDPOINT — exporter disabled (need http(s)://host[:port])");
+      }
+    }
+  }
+  return otlpUrl;
+}
+
+function otlpFlushMs() {
+  const n = Number(process.env.OTLP_FLUSH_MS);
+  return Number.isFinite(n) && n >= 50 && n <= 60000 ? n : 3000;
+}
+
+function otlpAttr(key, value) {
+  return { key, value: { stringValue: String(value == null ? "" : value).slice(0, 2048) } };
+}
+
+function otlpSpanFor(ev) {
+  const t0 = BigInt(Math.max(0, Math.round(ev.t || Date.now())));
+  const ms = Number(ev.ms);
+  const t1 = t0 + BigInt(Math.max(1, Math.round(Number.isFinite(ms) ? ms : 1)));
+  const verdict = ev.signed && ev.signed.present ? ev.signed.verdict || "none" : "unsigned";
+  return {
+    traceId: crypto.randomBytes(16).toString("hex"),
+    spanId: crypto.randomBytes(8).toString("hex"),
+    name: `${ev.method || "GET"} ${String(ev.path || "/").slice(0, 512)}`,
+    kind: 3, // SPAN_KIND_SERVER
+    startTimeUnixNano: (t0 * 1000000n).toString(),
+    endTimeUnixNano: (t1 * 1000000n).toString(),
+    attributes: [
+      otlpAttr("http.request.method", ev.method || "GET"),
+      otlpAttr("url.path", ev.path || "/"),
+      otlpAttr("user_agent.original", ev.ua || ""),
+      otlpAttr("client.address", ev.ip || ""),
+      otlpAttr("aegis.kind", ev.kind || ""),
+      otlpAttr("aegis.verdict", verdict),
+      otlpAttr("aegis.agent", (ev.agent && ev.agent.name) || ""),
+    ],
+    status: { code: ev.status >= 500 ? 2 : 1 }, // ERROR : OK
+  };
+}
+
+function otlpEnsureTimer() {
+  if (otlpTimer) return;
+  otlpTimer = setInterval(() => {
+    const u = otlpEndpoint();
+    if (u) otlpFlush(u);
+  }, otlpFlushMs());
+  if (otlpTimer.unref) otlpTimer.unref();
+}
+
+function otlpEnqueue(ev) {
+  const u = otlpEndpoint();
+  if (!u) return; // exporter off (default)
+  if (otlpQueue.length >= OTLP_QUEUE_CAP) { otlpQueue.shift(); counters.otlp.dropped++; }
+  otlpQueue.push(otlpSpanFor(ev));
+  if (otlpQueue.length >= OTLP_BATCH) otlpFlush(u);
+  else otlpEnsureTimer();
+}
+
+function otlpFlush(u) {
+  if (!otlpQueue.length) return;
+  const spans = otlpQueue.splice(0, otlpQueue.length);
+  const body = JSON.stringify({
+    resourceSpans: [{
+      resource: { attributes: [otlpAttr("service.name", "aegis")] },
+      scopeSpans: [{ scope: { name: "aegis.capture" }, spans }],
+    }],
+  });
+  const mod = u.protocol === "https:" ? https : http;
+  let settled = false;
+  const done = (ok) => { if (settled) return; settled = true; if (ok) counters.otlp.ok++; else counters.otlp.error++; };
+  let req;
+  try {
+    req = mod.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === "https:" ? 443 : 80),
+      path: u.pathname,
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+      timeout: OTLP_TIMEOUT_MS,
+    }, (res) => {
+      res.resume();
+      res.on("end", () => done(res.statusCode >= 200 && res.statusCode < 300));
+      res.on("error", () => done(false));
+    });
+  } catch (_) { done(false); return; }
+  req.on("error", () => done(false));
+  req.on("timeout", () => { done(false); req.destroy(); });
+  req.end(body);
 }
 
 /* ── SSE ────────────────────────────────────────────────── */
@@ -924,6 +1052,7 @@ function emit(ev) {
     if (sg.revenue) counters.signals.revenue += sg.revenue;
   }
   broadcast(ev);
+  otlpEnqueue(ev); // no-op unless OTLP_ENDPOINT is configured
 }
 
 function makeEvent(req, status, ms) {
@@ -1323,6 +1452,10 @@ if (require.main === module) {
     console.log(`[auth] enabled — ${us.length} user(s), roles: ${[...new Set(us.map((u) => u.role))].join(", ")}`);
   } else {
     console.log("[auth] disabled (set AEGIS_AUTH_USERS to require login — required for any non-loopback bind)");
+  }
+  if (process.env.OTLP_ENDPOINT) {
+    const u = otlpEndpoint();
+    console.log(u ? `[otlp] exporting spans → ${u}` : "[otlp] OTLP_ENDPOINT invalid — exporter disabled");
   }
   server.listen(PORT, HOST, () => {
     console.log(`AEGIS capture server → http://${HOST}:${PORT}`);

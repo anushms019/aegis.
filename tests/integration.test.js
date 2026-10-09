@@ -304,3 +304,77 @@ test("auth disabled (default) leaves every route open", async () => {
   assert.equal((await fetch(base + "/")).status, 200);
   assert.equal((await fetch(base + "/metrics")).status, 200);
 });
+
+/* ── OTLP/HTTP exporter ─────────────────────────────────── */
+
+test("OTLP/HTTP exporter pushes request spans to a collector", async () => {
+  const httpMod = require("node:http");
+  const batches = [];
+  const collector = httpMod.createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      batches.push({ url: req.url, body: JSON.parse(b) });
+      res.writeHead(202);
+      res.end();
+    });
+  });
+  await new Promise((r) => collector.listen(0, "127.0.0.1", r));
+  process.env.OTLP_ENDPOINT = `http://127.0.0.1:${collector.address().port}`;
+  try {
+    // fill one batch so the export fires immediately (batch size 32)
+    for (let i = 0; i < 32; i++) {
+      await fetch(base + "/otlp-" + i, { headers: { "user-agent": "curl/8.5.0" } });
+    }
+    const deadline = Date.now() + 3000;
+    while (!batches.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(batches.length, "collector received no batch");
+
+    // batches may split if the interval timer fires mid-loop — count spans
+    // across every batch, but require each to target the OTLP signal path
+    for (const b of batches) assert.equal(b.url, "/v1/traces");
+    const allSpans = batches.flatMap((b) => b.body.resourceSpans[0].scopeSpans[0].spans);
+    assert.ok(allSpans.length >= 32, `expected >= 32 spans total, got ${allSpans.length}`);
+    const svc = batches[0].body.resourceSpans[0].resource.attributes;
+    assert.ok(svc.some((a) => a.key === "service.name" && a.value.stringValue === "aegis"));
+
+    const s = allSpans[0];
+    assert.match(s.traceId, /^[0-9a-f]{32}$/);
+    assert.match(s.spanId, /^[0-9a-f]{16}$/);
+    assert.match(s.name, /^GET \/otlp-\d+$/);
+    assert.equal(s.kind, 3, "spans must be SPAN_KIND_SERVER");
+    assert.ok(BigInt(s.endTimeUnixNano) >= BigInt(s.startTimeUnixNano));
+    const attrs = Object.fromEntries(s.attributes.map((a) => [a.key, a.value.stringValue]));
+    assert.equal(attrs["http.request.method"], "GET");
+    assert.match(attrs["url.path"], /^\/otlp-\d+$/);
+    assert.equal(attrs["aegis.kind"], "tool");
+    assert.equal(attrs["user_agent.original"], "curl/8.5.0");
+
+    const m = await (await fetch(base + "/metrics")).text();
+    assert.match(m, /aegis_otlp_exports_total\{result="ok"\} [1-9]/);
+  } finally {
+    delete process.env.OTLP_ENDPOINT;
+    collector.close();
+  }
+});
+
+test("OTLP export failures are counted, never thrown", async () => {
+  // point at a closed port: the flush must fail soft and stay observable
+  process.env.OTLP_ENDPOINT = "http://127.0.0.1:9";
+  try {
+    for (let i = 0; i < 32; i++) {
+      await fetch(base + "/otlp-fail-" + i, { headers: { "user-agent": "curl/8.5.0" } });
+    }
+    const deadline = Date.now() + 4000;
+    let m = "";
+    while (Date.now() < deadline) {
+      m = await (await fetch(base + "/metrics")).text();
+      if (/aegis_otlp_exports_total\{result="error"\} [1-9]/.test(m)) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.match(m, /aegis_otlp_exports_total\{result="error"\} [1-9]/, "failed export must be counted");
+    assert.equal((await fetch(base + "/api/health")).status, 200, "server must stay healthy after export failures");
+  } finally {
+    delete process.env.OTLP_ENDPOINT;
+  }
+});
