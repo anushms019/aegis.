@@ -115,6 +115,24 @@ kubectl apply -k deploy/k8s/         # probes: /api/health + /api/snapshot
 The multi-stage `Dockerfile` runs the full test suite inside the build stage,
 ships a non-root minimal runtime, and declares a `HEALTHCHECK`.
 
+**Signed verification in a container** needs the keyring mounted — keys are
+never baked into the image:
+
+```bash
+# placeholder keyring so the bind-mount source exists (the demo rewrites it):
+printf '{"keys":[]}' > .demo-jwks.json
+MSYS_NO_PATHCONV=1 docker run --rm -p 8788:8788 \
+  -e JWKS_PATH=/app/.demo-jwks.json \
+  -v "$PWD/.demo-jwks.json:/app/.demo-jwks.json:ro" aegis:local
+```
+
+Without a mounted `JWKS_PATH` every signature is honestly `unresolved`
+(fail-closed — nothing is trusted without a key). On Git Bash the
+`MSYS_NO_PATHCONV=1` prefix stops Docker arguments like `/app/...` from being
+rewritten to `C:/Program Files/Git/app/...`. Then run `node scripts/demo-traffic.js`
+from the host — it fires at the published port and verifies the `/metrics`
+scrape accounts for every request.
+
 **Dashboard only:** open `index.html` directly in a browser — it is fully
 self-contained and runs from its built-in simulation engine (`file://` pages never
 attempt a live connection).
