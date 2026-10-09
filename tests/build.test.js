@@ -183,3 +183,47 @@ test("validateAgainstSchema passes conforming payloads and flags every violation
   assert.equal(validate({ q: "" }, schema).ok, false, "minLength violation must fail");
   assert.equal(validate({ q: "hi", evil: 1 }, schema).ok, false, "additionalProperties:false must reject extras");
 });
+
+test("live-vs-sim integrity: honest clock, no baseline mixing, no fabricated trends", () => {
+  const app = read("app.js").replace(/\r\n/g, "\n");
+  const html = read("index.html");
+
+  // clock: date, time and zone must come from one Date in one zone —
+  // the old code mixed toISOString() (UTC date) with toTimeString()
+  // (local time) and labeled the result "UTC"
+  assert.ok(!app.includes("toTimeString"), "clock must not mix local time-of-day into a differently-labeled zone");
+  assert.ok(app.includes("CLOCK_ZONE"), "clock must derive its timezone label");
+
+  // live snapshots must never add simulated baselines to real signals
+  assert.ok(!app.includes("kpi.ipi = 1247 +"), "hardcoded IPI baseline leaked into live signal rendering");
+  assert.ok(!app.includes("kpi.rev = 84921.55"), "hardcoded revenue baseline leaked into live signal rendering");
+  assert.ok(!app.includes("kpi.anom = 318 +"), "hardcoded anomaly baseline leaked into live signal rendering");
+
+  // fabricated trend percentages are gone from the bundle entirely
+  for (const fake of [
+    "▲ 4.7% vs. prior 24h",
+    "▲ 1.9 pts — Web Bot Auth adoption",
+    "▲ 12.4% — stealth engine campaigns",
+    "▲ 32% YoY (in-the-wild)",
+    "▲ 9.2% — Pay Per Crawl beta",
+  ]) {
+    assert.ok(!app.includes(fake), `fabricated trend line still shipped: ${fake}`);
+  }
+
+  // shared ledgers: sim row generators pause while a live capture is on
+  assert.ok(app.includes("if (!liveMode) addMcpRow()"), "MCP sim rows must pause in live mode");
+  assert.ok(app.includes("if (!liveMode) addIpiRow()"), "IPI sim rows must pause in live mode");
+  // real rows announce themselves inside the SIM TrajAD console
+  assert.ok(app.includes('"LIVE · " + sg.trajad'), "a real TrajAD signal must be marked LIVE inside the sim console");
+
+  // honesty: the UI must not claim a Content-Digest verification the
+  // server never performs (it enforces the ±120 s freshness window only)
+  assert.ok(!html.includes("Verify Content-Digest"), "verification panel claims a digest check that does not exist");
+  assert.ok(html.includes("Freshness window (±120 s)"), "step 4 must describe the freshness check that does happen");
+
+  // the editorial ticker is always labeled SIM
+  assert.ok(app.includes("class='dim'>SIM<"), "ticker must carry its SIM label");
+
+  // duplicate SSE frames are dropped before any counter moves
+  assert.ok(app.includes("seenEvents"), "event dedupe guard missing from the live feed");
+});

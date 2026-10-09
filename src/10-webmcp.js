@@ -313,5 +313,8 @@ function initMcpInspector() {
 }
 
 for (let i = 0; i < 8; i++) addMcpRow();
-setInterval(addMcpRow, 3100);
+/* Simulated ledger rows pause while a live capture is attached —
+   enterLiveMode() has cleared the tbody, and real rows arrive via
+   addMcpRowReal(), so mocks can never mix into a live ledger. */
+setInterval(() => { if (!liveMode) addMcpRow(); }, 3100);
 initMcpInspector();

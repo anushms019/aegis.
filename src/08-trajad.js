@@ -79,7 +79,8 @@ function traceTick() {
     addTrace(phase, kvNode(verb, target));
   } else addTrace(phase, kvNode("observed:", pick(OBSERVATIONS)));
 
-  if (Math.random() < 0.055) {
+  if (!liveMode && Math.random() < 0.055) {
+    // simulated anomaly: fires only while the console runs as simulation
     addTrace("ANOMALY", pick(ANOMALIES), true);
     kpi.anom++;
     const st = $("#trajad-state");

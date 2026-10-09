@@ -70,7 +70,7 @@ async function runVerification() {
         "parsing Signature-Input / Signature / Signature-Agent",
         "resolving Signature-Agent URI",
         `fetching JWKS (kid=${ag.kid})`,
-        "validating Content-Digest + freshness window",
+        "checking freshness window (±120 s)",
         "Ed25519 signature verification over signature base",
         "consulting agent identity registry → trust decision",
       ][i]}`;

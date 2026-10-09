@@ -13,7 +13,8 @@ function buildTicker() {
     "median ingest→dashboard latency 310ms across 42 edge PoPs",
   ];
   const line = items.join(" &nbsp;·&nbsp; ") + " &nbsp;·&nbsp; ";
-  $("#ticker-inner").innerHTML = line + line;
+  // editorial/demo content — always labeled so it can't read as telemetry
+  $("#ticker-inner").innerHTML = "<span class='dim'>SIM</span> " + line + line;
 }
 buildTicker();
 setInterval(buildTicker, 12000);

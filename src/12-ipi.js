@@ -49,11 +49,14 @@ function addIpiRow() {
   while (body.children.length > 40) body.lastChild.remove();
 }
 for (let i = 0; i < 7; i++) addIpiRow();
-setInterval(addIpiRow, 3400);
+/* Simulated IPI rows pause while a live capture is attached —
+   enterLiveMode() clears the tbody, real rows arrive via addIpiRowReal(). */
+setInterval(() => { if (!liveMode) addIpiRow(); }, 3400);
 
 let gatesBlocked = 41;
 $("#gate-blocked").textContent = gatesBlocked + " halted";
 setInterval(() => {
+  if (liveMode) return; // panel stats: sim drift only in sim mode
   if (Math.random() < 0.45) {
     gatesBlocked++;
     $("#gate-blocked").textContent = gatesBlocked + " halted";

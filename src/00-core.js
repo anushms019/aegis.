@@ -18,6 +18,6 @@ const escHtml = (s) => String(s ?? "—").replace(/[&<>"']/g, (c) => ({ "&": "&a
 /* ─── live capture state (fed by the SSE module at the end of this file) ─── */
 let liveMode = false;      // true once a real event source is attached
 let labelsMarked = false;
-const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, valid: 0, invalid: 0, unresolved: 0, since: null };
+const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, valid: 0, invalid: 0, unresolved: 0, since: null, signals: null };
 let pendingVerify = null;
 

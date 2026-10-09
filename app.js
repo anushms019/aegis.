@@ -18,17 +18,37 @@ const escHtml = (s) => String(s ?? "—").replace(/[&<>"']/g, (c) => ({ "&": "&a
 /* ─── live capture state (fed by the SSE module at the end of this file) ─── */
 let liveMode = false;      // true once a real event source is attached
 let labelsMarked = false;
-const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, valid: 0, invalid: 0, unresolved: 0, since: null };
+const live = { total: 0, signed: 0, shadow: 0, known: 0, human: 0, tool: 0, valid: 0, invalid: 0, unresolved: 0, since: null, signals: null };
 let pendingVerify = null;
 
-/* ───────────────────────── clock ───────────────────────── */
-setInterval(() => {
-  const d = new Date();
-  $("#clock").textContent =
-    d.toISOString().slice(0, 10) + " " + d.toTimeString().slice(0, 8) + " UTC";
-}, 1000);
+/* ───────────────────────── clock ─────────────────────────
+   Date, time and timezone must agree. The previous version mixed a
+   UTC date with a local time-of-day and labeled the result "UTC" —
+   the three could contradict each other.
+   All three fields now come from the same Date in the same zone
+   (browser local time + the real IANA zone name). */
+const CLOCK_ZONE = (() => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "local"; }
+  catch (_) { return "local"; }
+})();
 
+function renderClock() {
+  const el = $("#clock");
+  if (!el) return;
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  el.textContent =
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${CLOCK_ZONE}`;
+}
+renderClock();
+setInterval(renderClock, 1000);
 /* ───────────────────────── KPIs ────────────────────────── */
+/* Simulated KPI state — ONLY ever rendered in simulation mode.
+   In live mode renderKpis() reads the real counters in `live`
+   (fed by applySnapshot/ingestReal); nothing here may touch a
+   live-rendered value, and no hardcoded baseline is ever added
+   to a live signal. */
 const kpi = {
   agents:  184392,
   signed:  0.638,
@@ -40,7 +60,8 @@ const kpi = {
 
 function renderKpis() {
   if (liveMode) {
-    // real counters from the capture server
+    // real counters from the capture server (absolute snapshot values,
+    // kept in sync incrementally by ingestReal — never simulated)
     $("#kpi-agents").textContent = fmtInt(live.total);
     $("#kpi-signed").textContent = live.total ? ((live.signed / live.total) * 100).toFixed(1) + "%" : "0%";
     $("#kpi-shadow").textContent = fmtInt(live.shadow);
@@ -50,35 +71,48 @@ function renderKpis() {
     if ($("#jwks-n")) $("#jwks-n").textContent = fmtInt(live.signed);
     if ($("#jwks-ok")) $("#jwks-ok").textContent = fmtInt(live.valid);
     if ($("#jwks-bad")) $("#jwks-bad").textContent = fmtInt(live.invalid);
+    // signal cards: raw server-side signal counters since server start.
+    // live.signals comes straight from the snapshot — no simulated
+    // baseline (the old `1247 + signals.ipi` mix) is added.
+    const sg = live.signals || {};
+    $("#kpi-anom").textContent = fmtInt(sg.trajad || 0);
+    $("#kpi-ipi").textContent = fmtInt(sg.ipi || 0);
+    $("#kpi-rev").textContent = fmtMoney(sg.revenue || 0);
   } else {
+    // simulation mode: every value below is simulated and its label
+    // is marked "· SIM" by applySourceState()
     $("#kpi-agents").textContent = fmtInt(kpi.agents);
     $("#kpi-signed").textContent = (kpi.signed * 100).toFixed(1) + "%";
     $("#kpi-shadow").textContent = fmtInt(kpi.shadow);
+    $("#kpi-anom").textContent = fmtInt(kpi.anom);
+    $("#kpi-ipi").textContent = fmtInt(kpi.ipi);
+    $("#kpi-rev").textContent = fmtMoney(kpi.rev);
   }
-  $("#kpi-anom").textContent   = fmtInt(kpi.anom);
-  $("#kpi-ipi").textContent    = fmtInt(kpi.ipi);
-  $("#kpi-rev").textContent    = fmtMoney(kpi.rev);
 }
-$("#kpi-agents-d").textContent = "▲ 4.7% vs. prior 24h";
-$("#kpi-signed-d").textContent = "▲ 1.9 pts — Web Bot Auth adoption";
-$("#kpi-shadow-d").textContent = "▲ 12.4% — stealth engine campaigns";
-$("#kpi-anom-d").textContent   = "0.17% of trajectories halted";
-$("#kpi-ipi-d").textContent    = "▲ 32% YoY (in-the-wild)";
-$("#kpi-rev-d").textContent    = "▲ 9.2% — Pay Per Crawl beta";
+/* Delta lines: factual descriptions of what the number is. The old
+   hardcoded trend percentages ("▲ 4.7% vs prior 24h", "▲ 32% YoY", …)
+   claimed measurements the app does not make — removed everywhere;
+   live mode clears them via markLabelsLive(). */
+$("#kpi-agents-d").textContent = "simulated ingest counter";
+$("#kpi-signed-d").textContent = "signed ÷ captured (simulated)";
+$("#kpi-shadow-d").textContent = "simulated detections";
+$("#kpi-anom-d").textContent = "simulated halts";
+$("#kpi-ipi-d").textContent = "simulated payloads/hr";
+$("#kpi-rev-d").textContent = "simulated settle volume";
 renderKpis();
 
+/* Simulation drift — simulation mode ONLY. In live mode these cards
+   render live.signals, so a random walk must never touch them. */
 setInterval(() => {
-  if (!liveMode) {
-    kpi.agents += rndi(3, 40);
-    kpi.signed = clamp(kpi.signed + rnd(-0.001, 0.0011), 0.55, 0.78);
-    if (Math.random() < 0.55) kpi.shadow += rndi(0, 4);
-  }
+  if (liveMode) return;
+  kpi.agents += rndi(3, 40);
+  kpi.signed = clamp(kpi.signed + rnd(-0.001, 0.0011), 0.55, 0.78);
+  if (Math.random() < 0.55) kpi.shadow += rndi(0, 4);
   if (Math.random() < 0.35) kpi.anom += 1;
   if (Math.random() < 0.6)  kpi.ipi  += rndi(0, 6);
   kpi.rev += rnd(2, 60);
   renderKpis();
 }, 2000);
-
 /* ─────────────────────── world map ─────────────────────── */
 const MAP_NODES = [
   { x: 138, y: 108, label: "us-west",  region: "NA",    base: 4200, threat: false },
@@ -221,7 +255,7 @@ async function runVerification() {
         "parsing Signature-Input / Signature / Signature-Agent",
         "resolving Signature-Agent URI",
         `fetching JWKS (kid=${ag.kid})`,
-        "validating Content-Digest + freshness window",
+        "checking freshness window (±120 s)",
         "Ed25519 signature verification over signature base",
         "consulting agent identity registry → trust decision",
       ][i]}`;
@@ -508,7 +542,8 @@ function traceTick() {
     addTrace(phase, kvNode(verb, target));
   } else addTrace(phase, kvNode("observed:", pick(OBSERVATIONS)));
 
-  if (Math.random() < 0.055) {
+  if (!liveMode && Math.random() < 0.055) {
+    // simulated anomaly: fires only while the console runs as simulation
     addTrace("ANOMALY", pick(ANOMALIES), true);
     kpi.anom++;
     const st = $("#trajad-state");
@@ -917,7 +952,10 @@ function initMcpInspector() {
 }
 
 for (let i = 0; i < 8; i++) addMcpRow();
-setInterval(addMcpRow, 3100);
+/* Simulated ledger rows pause while a live capture is attached —
+   enterLiveMode() has cleared the tbody, and real rows arrive via
+   addMcpRowReal(), so mocks can never mix into a live ledger. */
+setInterval(() => { if (!liveMode) addMcpRow(); }, 3100);
 initMcpInspector();
 /* ───────────────────── Pay-per-crawl ───────────────────── */
 const PUBLISHERS = [
@@ -1036,11 +1074,14 @@ function addIpiRow() {
   while (body.children.length > 40) body.lastChild.remove();
 }
 for (let i = 0; i < 7; i++) addIpiRow();
-setInterval(addIpiRow, 3400);
+/* Simulated IPI rows pause while a live capture is attached —
+   enterLiveMode() clears the tbody, real rows arrive via addIpiRowReal(). */
+setInterval(() => { if (!liveMode) addIpiRow(); }, 3400);
 
 let gatesBlocked = 41;
 $("#gate-blocked").textContent = gatesBlocked + " halted";
 setInterval(() => {
+  if (liveMode) return; // panel stats: sim drift only in sim mode
   if (Math.random() < 0.45) {
     gatesBlocked++;
     $("#gate-blocked").textContent = gatesBlocked + " halted";
@@ -1063,7 +1104,8 @@ function buildTicker() {
     "median ingest→dashboard latency 310ms across 42 edge PoPs",
   ];
   const line = items.join(" &nbsp;·&nbsp; ") + " &nbsp;·&nbsp; ";
-  $("#ticker-inner").innerHTML = line + line;
+  // editorial/demo content — always labeled so it can't read as telemetry
+  $("#ticker-inner").innerHTML = "<span class='dim'>SIM</span> " + line + line;
 }
 buildTicker();
 setInterval(buildTicker, 12000);
@@ -1354,7 +1396,16 @@ function setPill(text, mode) {
 function applySourceState() {
   SIM_TAGGED.forEach((s) => { const el = $(s); if (el) feedTag(el, "SIM"); });
   LIVE_TAGGED.forEach((s) => { const el = $(s); if (el) feedTag(el, liveMode ? "LIVE" : "SIM"); });
-  if (!liveMode) setPill("Simulated Feed", "sim");
+  if (!liveMode) {
+    setPill("Simulated Feed", "sim");
+    // KPI cards have no panel-head tag — mark their labels as simulated
+    // so a file:// demo can never be mistaken for captured traffic.
+    ["#kpi-agents", "#kpi-signed", "#kpi-shadow", "#kpi-anom", "#kpi-ipi", "#kpi-rev"].forEach((sel) => {
+      const el = $(sel);
+      const l = el && el.closest(".kpi") && el.closest(".kpi").querySelector(".label");
+      if (l && !l.textContent.includes("· SIM")) l.textContent += " · SIM";
+    });
+  }
   const at = $("#alert-tag");
   if (at) at.textContent = liveMode ? "LIVE" : "SIM";
 }
@@ -1367,14 +1418,18 @@ function markLabelsLive() {
   setLab("#kpi-agents", "Requests Captured · since server start");
   setLab("#kpi-signed", "Signed Entries · RFC 9421 · live");
   setLab("#kpi-shadow", "Shadow Agents Detected · live");
+  // signal cards become real server counters — rename honestly and
+  // drop the fabricated trend deltas
+  setLab("#kpi-anom", "TrajAD-flagged events · live");
+  setLab("#kpi-ipi", "IPI-flagged requests · live");
+  setLab("#kpi-rev", "Crawler revenue signals · live");
   const d = (id) => { const el = $(id); if (el) el.textContent = ""; };
   d("#kpi-agents-d");
+  d("#kpi-anom-d");
+  d("#kpi-ipi-d");
+  d("#kpi-rev-d");
   if ($("#kpi-signed-d")) { $("#kpi-signed-d").textContent = "signed ÷ captured requests"; $("#kpi-signed-d").className = "delta flat"; }
   if ($("#kpi-shadow-d")) { $("#kpi-shadow-d").textContent = "real classification"; $("#kpi-shadow-d").className = "delta flat"; }
-  ["#kpi-anom", "#kpi-ipi", "#kpi-rev"].forEach((sel) => {
-    const l = lab(sel);
-    if (l && !l.textContent.includes("· SIM")) l.textContent += " · SIM";
-  });
   // verification-panel counters become real in live mode — rename honestly
   const jwksLabel = (sel, txt) => {
     const el = $(sel);
@@ -1391,6 +1446,15 @@ function enterLiveMode() {
   markLabelsLive();
   const sb = $("#shadow-body");
   if (sb) sb.innerHTML = "";
+  // seize the shared ledgers: drop simulated rows so live rows can never
+  // sit next to mocks (their sim generators pause while liveMode is set)
+  const mb = $("#mcp-body");
+  if (mb) mb.innerHTML = "";
+  const ib = $("#ipi-body");
+  if (ib) ib.innerHTML = "";
+  if (typeof mcpOk !== "undefined") { mcpOk = 0; mcpAll = 0; }
+  const md = $("#mcp-discovered"); if (md) md.textContent = "0 discovered";
+  const ms = $("#mcp-success"); if (ms) ms.textContent = "— success";
   // hand the event stream over to real data
   Stream.eventLog = [];
   Stream.evTotal = 0;
@@ -1574,18 +1638,31 @@ function applySnapshot(s) {
   live.human = bk.human || 0;
   live.tool = bk.tool || 0;
   if (s.signals) {
+    // raw server counters only — these are rendered by renderKpis() in
+    // live mode. Simulated KPI state (kpi.*) is never mixed with them.
     live.signals = s.signals;
-    kpi.ipi = 1247 + (s.signals.ipi || 0);
-    kpi.anom = 318 + (s.signals.trajad || 0);
-    kpi.rev = 84921.55 + (s.signals.revenue || 0);
   }
   if (!liveMode) { liveMode = true; enterLiveMode(); }
   renderKpis();
   setPill(`Live Capture · ${live.total} events`, "live");
 }
 
+/* Bounded dedupe: a reconnect or a replayed frame must not double-count.
+   Keyed on the event's full identity; capped at 500 keys. */
+const seenEvents = new Set();
+function eventKey(ev) {
+  return [ev.t, ev.kind, ev.method, ev.path, ev.status, ev.ms, ev.ua, ev.ip].join("|");
+}
+
 function ingestReal(ev) {
   if (!liveMode) { liveMode = true; enterLiveMode(); }
+  const key = eventKey(ev);
+  if (seenEvents.has(key)) return; // duplicate frame — never counted twice
+  seenEvents.add(key);
+  if (seenEvents.size > 500) {
+    const first = seenEvents.values().next().value;
+    seenEvents.delete(first);
+  }
   live.total += 1;
   live[ev.kind] = (live[ev.kind] || 0) + 1;
   if (ev.signed && ev.signed.verdict && Object.prototype.hasOwnProperty.call(live, ev.signed.verdict)) {
@@ -1619,13 +1696,13 @@ function applyRealSignals(ev) {
 
   if (sg.ipi) {
     live.signals.ipi++;
-    kpi.ipi++;
     addIpiRowReal(ev, sg.ipi);
   }
   if (sg.trajad) {
     live.signals.trajad++;
-    kpi.anom++;
-    addTrace("ANOMALY", sg.trajad, true);
+    // the TrajAD console keeps running its SIM loop, so a real signal
+    // must announce itself as live instead of blending in
+    addTrace("ANOMALY", "LIVE · " + sg.trajad, true);
     const st = $("#trajad-state");
     if (st) { st.textContent = "TrajAD: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200); }
   }
@@ -1635,13 +1712,13 @@ function applyRealSignals(ev) {
   }
   if (sg.revenue) {
     live.signals.revenue += sg.revenue;
-    kpi.rev += sg.revenue;
   }
   renderKpis();
+  // Panels whose CONTENT becomes fully real are flipped to LIVE.
+  // #chart-revenue and #trace-stream keep simulated content, so they
+  // stay tagged SIM — only their inputs get a clearly marked live line.
   markPanelLive("#ipi-body");
-  markPanelLive("#trace-stream");
   markPanelLive("#mcp-body");
-  markPanelLive("#chart-revenue");
 }
 
 /* flip a panel's SIM tag to LIVE when real data starts arriving */
@@ -1662,6 +1739,9 @@ function addIpiRowReal(ev, vector) {
   if (!body) return;
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
+  // panel head shows the real signal count instead of the sim "/ hr" drift
+  const ir = $("#ipi-rate");
+  if (ir) ir.textContent = fmtInt((live.signals && live.signals.ipi) || 0) + " flagged";
 }
 
 function addMcpRowReal(ev) {
@@ -1688,6 +1768,12 @@ function addMcpRowReal(ev) {
   if (!body) return;
   body.prepend(tr);
   while (body.children.length > 40) body.lastChild.remove();
+  // ledger head counts REAL invocations only (sim counters reset on seize)
+  mcpAll++; if (ok) mcpOk++;
+  const md = $("#mcp-discovered");
+  if (md) md.textContent = mcpAll + " discovered";
+  const ms = $("#mcp-success");
+  if (ms) ms.textContent = (mcpOk / mcpAll * 100).toFixed(1) + "% success";
 }
 
 function connectCapture() {
