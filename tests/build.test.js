@@ -184,6 +184,80 @@ test("validateAgainstSchema passes conforming payloads and flags every violation
   assert.equal(validate({ q: "hi", evil: 1 }, schema).ok, false, "additionalProperties:false must reject extras");
 });
 
+test("validateAgainstSchema handles nested objects, arrays and combinators", () => {
+  const src = read("app.js").replace(/\r\n/g, "\n");
+  const grab = (name) => {
+    const s = src.indexOf(`function ${name}`);
+    assert.ok(s !== -1, `${name} missing from bundle`);
+    const e = src.indexOf("\n}\n", s);
+    assert.ok(e > s, `${name} end not found`);
+    return src.slice(s, e + 3);
+  };
+  const validate = new Function(
+    grab("mcpTypeName") + "\n" + grab("validateAgainstSchema") +
+    "; return validateAgainstSchema;")();
+
+  const nested = {
+    type: "object", required: ["filter"],
+    properties: {
+      filter: {
+        type: "object", required: ["city"],
+        properties: {
+          city: { type: "string", minLength: 3 },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+        },
+      },
+      tags: { type: "array", items: { type: "string", enum: ["a", "b"] }, minItems: 1 },
+      mode: { anyOf: [{ type: "string", enum: ["fast"] }, { type: "integer", minimum: 1 }] },
+      scope: { allOf: [{ type: "string" }, { maxLength: 4 }] },
+      level: { oneOf: [{ type: "integer" }, { type: "string", enum: ["auto"] }] },
+    },
+  };
+
+  const good = validate({
+    filter: { city: "TYO", limit: 10 }, tags: ["a", "b"],
+    mode: "fast", scope: "home", level: 3,
+  }, nested);
+  assert.equal(good.ok, true, JSON.stringify(good.findings.filter((f) => !f.ok)));
+
+  // nested object: wrong leaf type is reported at its qualified path
+  const badLeaf = validate({ filter: { city: "TO", limit: 10 } }, nested);
+  assert.equal(badLeaf.ok, false, "short nested string must fail");
+  assert.ok(badLeaf.findings.some((f) => f.path === "filter.city" && !f.ok),
+    "expected qualified path filter.city");
+
+  // nested required missing
+  const miss = validate({ filter: { limit: 5 } }, nested);
+  assert.ok(miss.findings.some((f) => f.path === "filter.city" && !f.ok && f.actual === "(missing)"),
+    "nested required miss must report filter.city");
+
+  // array items: element violation points at the index
+  const badItem = validate({ filter: { city: "TYO" }, tags: ["a", "z"] }, nested);
+  assert.equal(badItem.ok, false, "enum-violating item must fail");
+  assert.ok(badItem.findings.some((f) => f.path === "tags[1]" && !f.ok),
+    "expected item path tags[1]");
+
+  // minItems
+  assert.equal(validate({ filter: { city: "TYO" }, tags: [] }, nested).ok, false,
+    "empty array must violate minItems");
+
+  // anyOf: one matching branch passes, none fails
+  assert.equal(validate({ filter: { city: "TYO" }, mode: 5 }, nested).ok, true,
+    "anyOf integer branch must pass");
+  assert.equal(validate({ filter: { city: "TYO" }, mode: true }, nested).ok, false,
+    "anyOf must reject when no branch matches");
+
+  // allOf: both constraints apply (string AND max length)
+  assert.equal(validate({ filter: { city: "TYO" }, scope: "home" }, nested).ok, true);
+  assert.equal(validate({ filter: { city: "TYO" }, scope: "toolong" }, nested).ok, false,
+    "allOf must enforce every branch");
+
+  // oneOf: exactly one branch
+  assert.equal(validate({ filter: { city: "TYO" }, level: "auto" }, nested).ok, true);
+  assert.equal(validate({ filter: { city: "TYO" }, level: [1] }, nested).ok, false,
+    "oneOf must reject when nothing matches");
+});
+
 test("live-vs-sim integrity: honest clock, no baseline mixing, no fabricated trends", () => {
   const app = read("app.js").replace(/\r\n/g, "\n");
   const html = read("index.html");

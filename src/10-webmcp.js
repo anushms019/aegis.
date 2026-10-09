@@ -118,8 +118,6 @@ function validateAgainstSchema(payload, schema) {
     try { s = JSON.stringify(v); } catch (_) { s = String(v); }
     return s === undefined ? String(v) : s.length > 64 ? s.slice(0, 61) + "…" : s;
   };
-  const fail = (path, expected, actual) => findings.push({ path, expected, actual, ok: false });
-  const pass = (path, expected, actual) => findings.push({ path, expected, actual, ok: true });
   const typeOk = (value, type) => {
     if (type === "integer") return Number.isInteger(value);
     if (type === "number") return typeof value === "number" && Number.isFinite(value);
@@ -128,43 +126,107 @@ function validateAgainstSchema(payload, schema) {
     if (type === "null") return value === null;
     return typeof value === type;
   };
+  const tname = (v) => (typeof mcpTypeName === "function" ? mcpTypeName(v) : typeof v);
+  const describe = (spec) => {
+    if (!spec) return "value";
+    let d = spec.type || "value";
+    if (spec.enum) d += " ∈ [" + spec.enum.join(",") + "]";
+    else if (spec.const !== undefined) d += " = " + show(spec.const);
+    else if (spec.pattern) d += " ~ /" + spec.pattern + "/";
+    else if (spec.minimum !== undefined && spec.maximum !== undefined) d += " " + spec.minimum + "…" + spec.maximum;
+    else if (spec.minimum !== undefined) d += " ≥ " + spec.minimum;
+    else if (spec.maximum !== undefined) d += " ≤ " + spec.maximum;
+    else if (spec.minLength !== undefined) d += " len ≥ " + spec.minLength;
+    else if (spec.maxLength !== undefined) d += " len ≤ " + spec.maxLength;
+    return d;
+  };
+
+  /* Evaluate a branch without leaking findings into the parent report. */
+  function silentOk(value, spec, path) {
+    const sink = [];
+    return check(value, spec, path, sink);
+  }
+
+  /* Returns true when `value` satisfies `spec`. Every outcome is pushed
+     into `sink`; nested findings carry qualified paths (a.b, items[2]) so
+     the diff table can point at the exact failing field. Combinators
+     (anyOf/allOf/oneOf) are evaluated before shape constraints. */
+  function check(value, spec, path, sink) {
+    if (!spec || typeof spec !== "object") return true;
+    const rec = (ok, expected, actual) => sink.push({ path, expected, actual, ok });
+    const stop = (expected) => { rec(false, expected, tname(value) + " " + show(value)); return false; };
+
+    if (spec.anyOf !== undefined) {
+      const oks = spec.anyOf.map((b) => silentOk(value, b, path));
+      if (!oks.some(Boolean)) return stop("anyOf: 1 of " + spec.anyOf.length + " alternatives must match");
+    }
+    if (spec.oneOf !== undefined) {
+      const oks = spec.oneOf.map((b) => silentOk(value, b, path));
+      const n = oks.filter(Boolean).length;
+      if (n !== 1) return stop("oneOf: exactly 1 alternative must match (matched " + n + ")");
+    }
+    if (spec.allOf !== undefined) {
+      for (const b of spec.allOf) {
+        const branch = [];
+        if (!check(value, b, path, branch)) {
+          for (const f of branch) sink.push(f); // surface what failed
+          return false;
+        }
+      }
+    }
+
+    if (spec.type !== undefined && !typeOk(value, spec.type)) return stop(describe(spec));
+    if (spec.enum && !spec.enum.includes(value)) return stop(describe(spec));
+    if (spec.const !== undefined && value !== spec.const) return stop(describe(spec));
+    if (spec.pattern && !(new RegExp(spec.pattern).test(String(value)))) return stop(describe(spec));
+    if (spec.minLength !== undefined && String(value).length < spec.minLength) return stop(describe(spec));
+    if (spec.maxLength !== undefined && String(value).length > spec.maxLength) return stop(describe(spec));
+    if (spec.minimum !== undefined && value < spec.minimum) return stop(describe(spec));
+    if (spec.maximum !== undefined && value > spec.maximum) return stop(describe(spec));
+
+    if (spec.type === "object" && value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const props = spec.properties || {};
+      const additional = spec.additionalProperties !== false;
+      const keyPath = (k) => (path ? path + "." + k : k);
+      for (const key of spec.required || []) {
+        const p = keyPath(key);
+        if (!(key in value)) sink.push({ path: p, expected: "required", actual: "(missing)", ok: false });
+        else sink.push({ path: p, expected: "required", actual: "present", ok: true });
+      }
+      for (const [key, v] of Object.entries(value)) {
+        const sub = props[key];
+        if (!sub) {
+          const p = keyPath(key);
+          if (additional) sink.push({ path: p, expected: "additional (allowed)", actual: show(v), ok: true });
+          else sink.push({ path: p, expected: "not in schema (additionalProperties: false)", actual: show(v), ok: false });
+          continue;
+        }
+        check(v, sub, keyPath(key), sink);
+      }
+      for (const key of Object.keys(props)) {
+        if (!(key in value) && !(spec.required || []).includes(key)) {
+          const p = keyPath(key);
+          sink.push({ path: p, expected: "optional (absent)", actual: "(omitted)", ok: true });
+        }
+      }
+    }
+
+    if (spec.type === "array" && Array.isArray(value)) {
+      if (spec.minItems !== undefined && value.length < spec.minItems) return stop(describe(spec) + " items");
+      if (spec.maxItems !== undefined && value.length > spec.maxItems) return stop(describe(spec) + " items");
+      if (spec.items) {
+        value.forEach((el, i) => check(el, spec.items, path + "[" + i + "]", sink));
+      }
+    }
+
+    rec(true, describe(spec), show(value));
+    return true;
+  }
 
   if (!schema || schema.type !== "object" || typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return { ok: false, findings: [{ path: "(root)", expected: "object payload", actual: show(payload), ok: false }] };
   }
-  const props = schema.properties || {};
-  const additional = schema.additionalProperties !== false;
-
-  for (const key of schema.required || []) {
-    if (!(key in payload)) fail(key, "required", "(missing)");
-    else pass(key, "required", "present");
-  }
-  for (const [key, value] of Object.entries(payload)) {
-    const spec = props[key];
-    if (!spec) {
-      if (additional) pass(key, "additional (allowed)", show(value));
-      else fail(key, "not in schema (additionalProperties: false)", show(value));
-      continue;
-    }
-    const expected = spec.type + (spec.enum ? " ∈ [" + spec.enum.join(",") + "]"
-      : spec.pattern ? " ~ /" + spec.pattern + "/"
-      : spec.minimum !== undefined && spec.maximum !== undefined ? " " + spec.minimum + "…" + spec.maximum
-      : spec.minimum !== undefined ? " ≥ " + spec.minimum
-      : spec.minLength !== undefined ? " len ≥ " + spec.minLength : "");
-    const actual = mcpTypeName(value) + " " + show(value);
-    if (!typeOk(value, spec.type)) { fail(key, expected, actual); continue; }
-    if (spec.enum && !spec.enum.includes(value)) { fail(key, expected, actual); continue; }
-    if (spec.pattern && !(new RegExp(spec.pattern).test(String(value)))) { fail(key, expected, actual); continue; }
-    if (spec.minLength !== undefined && String(value).length < spec.minLength) { fail(key, expected, actual); continue; }
-    if (spec.minimum !== undefined && value < spec.minimum) { fail(key, expected, actual); continue; }
-    if (spec.maximum !== undefined && value > spec.maximum) { fail(key, expected, actual); continue; }
-    pass(key, expected, actual);
-  }
-  for (const key of Object.keys(props)) {
-    if (!(key in payload) && !(schema.required || []).includes(key)) {
-      pass(key, "optional (absent)", "(omitted)");
-    }
-  }
+  check(payload, schema, "", findings);
   return { ok: findings.every((f) => f.ok), findings };
 }
 
