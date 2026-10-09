@@ -792,6 +792,24 @@ function resetCounters() {
   counters.latency = { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
+/* Request paths are attacker-controlled. Cap the per-path map so a
+   unique-path flood cannot grow memory without bound or bloat the
+   /api/snapshot payload. Over the cap, evict the lowest-count entry
+   (never the key just touched); a re-seen path simply re-enters. */
+const PATH_CARDINALITY_CAP = 200;
+const PATH_KEY_MAX = 200; // chars — bounds snapshot payload size too
+function bumpPath(p) {
+  if (p.length > PATH_KEY_MAX) p = p.slice(0, PATH_KEY_MAX) + "…";
+  const bp = counters.byPath;
+  bp[p] = (bp[p] || 0) + 1;
+  if (Object.keys(bp).length <= PATH_CARDINALITY_CAP) return;
+  let victim = null, low = Infinity;
+  for (const k in bp) {
+    if (k === p) continue;
+    if (bp[k] < low) { low = bp[k]; victim = k; }
+  }
+  if (victim !== null) delete bp[victim];
+}
 function eventsPerMin() {
   const cutoff = Date.now() - 60000;
   counters.recent = counters.recent.filter((t) => t > cutoff);
@@ -889,7 +907,7 @@ function emit(ev) {
   }
   if (ev.signed && ev.signed.verdict && ev.signed.verdict !== "none") bump(counters.byVerdict, ev.signed.verdict);
   if (ev.kind === "known" || ev.kind === "signed") bump(counters.byAgent, ev.agent.name);
-  bump(counters.byPath, ev.path);
+  bumpPath(ev.path);
   const sg = ev.signals;
   if (sg) {
     if (sg.ipi) counters.signals.ipi++;

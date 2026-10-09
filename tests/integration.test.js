@@ -197,3 +197,49 @@ test("SSE stream hydrates with a snapshot then broadcasts live events", async ()
   assert.equal(ev.source, "http");
   assert.equal(ev.path, "/index.html");
 });
+
+test("per-path cardinality and key length are capped (unique-path flood)", async () => {
+  // 250 distinct paths, one absurdly long: an attacker-controlled map
+  // must not grow memory or snapshot payloads without bound
+  for (let i = 0; i < 250; i++) {
+    await fetch(base + "/flood-" + i, { headers: { "user-agent": "curl/8.5.0" } });
+  }
+  await fetch(base + "/" + "x".repeat(4000), { headers: { "user-agent": "curl/8.5.0" } });
+
+  const snap = snapshot();
+  const keys = Object.keys(snap.byPath);
+  assert.ok(keys.length <= 200, `byPath grew to ${keys.length} entries (cap 200)`);
+  for (const k of keys) {
+    assert.ok(k.length <= 201, `byPath key not truncated: ${k.length} chars`);
+  }
+  const payload = JSON.stringify(snap);
+  assert.ok(payload.length < 64 * 1024, `snapshot payload too large: ${payload.length}`);
+  assert.equal(snapshot().total, snap.total, "snapshot must stay idempotent");
+});
+
+test("reconnecting SSE re-hydrates absolute counters without double counting", async () => {
+  const grab = async () => {
+    const res = await fetch(base + "/events");
+    assert.match(res.headers.get("content-type") || "", /text\/event-stream/);
+    const reader = res.body.getReader();
+    let buf = "";
+    let idx = -1, end = -1;
+    // the stream opens with `retry: 2000` before the data frame
+    for (;;) {
+      idx = buf.indexOf("data: ");
+      end = idx >= 0 ? buf.indexOf("\n\n", idx) : -1;
+      if (end >= 0) break;
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += Buffer.from(value).toString("utf8");
+    }
+    try { await reader.cancel(); } catch (_) {}
+    assert.ok(end > 0, "hydration frame missing");
+    return JSON.parse(buf.slice(idx + "data: ".length, end));
+  };
+  const a = await grab();
+  assert.equal(a.type, "snapshot");
+  const b = await grab();
+  assert.equal(a.total, b.total, "hydration totals must be idempotent across reconnects");
+  assert.equal(snapshot().total, b.total, "hydration must mirror server counters exactly");
+});
