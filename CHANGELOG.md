@@ -19,6 +19,44 @@ advisory (the project is not published to npm).
   line — the metrics accounting is now exercised on every push across
   Node 20/22/24. The syntax check also covers `scripts/*.js`, which was
   previously unchecked.
+- **HTTP Basic authentication with RBAC** (`AEGIS_AUTH_USERS`) — roles
+  `admin` / `viewer` / `metrics` cover console, snapshot, SSE and
+  `/metrics` independently; `/api/health` stays open for probes;
+  constant-time credential comparison; refusals counted in
+  `aegis_auth_failures_total`. Unset (default) keeps the loopback-safe
+  open behavior; SECURITY.md §7 requires auth for any non-loopback bind.
+- **OTLP/HTTP span export** (`OTLP_ENDPOINT`) — every classified event is
+  exported as a server span (JSON, `POST …/v1/traces`) with method, path,
+  user agent, client address, kind and verdict, for Jaeger/Datadog/any
+  OTel collector. Stdlib only (no gRPC — would add a dependency);
+  operator-set endpoint, no redirects, 1024-span drop-oldest queue,
+  batch 32 / `OTLP_FLUSH_MS` (default 3 s), failures counted in
+  `aegis_otlp_exports_total` and never disturb capture.
+
+### Fixed
+
+- **Live-vs-simulated data integrity (audit's top finding).** The clock
+  mixed a UTC date with a local time-of-day under a "UTC" label; live
+  snapshots wrote `1247 + signals`-style mixes into simulated KPIs while a
+  random walk kept ticking the same cards; fabricated trend lines
+  (`▲ 4.7% vs prior 24h`, `▲ 32% YoY`, …) sat under real counters; mock
+  rows kept flowing into ledgers that also showed real events. Now: one
+  zone for date+time+zone, live cards render raw server counters only,
+  sim drift is gated to simulation mode, all fabricated trends removed,
+  shared ledgers seize on live attach (mocks pause, tbodies cleared),
+  real signals inside the sim console are prefixed `LIVE ·`, the ticker
+  is labeled SIM, KPI labels carry `· SIM` in demo mode, duplicate SSE
+  frames are dropped before any counter moves, and the panel no longer
+  claims "Verify Content-Digest" (the server enforces the ±120 s
+  freshness window only).
+- **Per-path counter cardinality** — attacker-controlled paths are capped
+  (200 entries, 200-char keys, lowest-count eviction) so unique-path
+  floods cannot grow memory or snapshot payloads.
+- **Schema validator completeness** — `validateAgainstSchema` now recurses
+  into nested objects (`filter.city`), validates array items (`tags[1]`)
+  with `minItems`/`maxItems`, and supports `anyOf`/`allOf`/`oneOf` plus
+  `const`/`maxLength`; the previous flat version passed vacuously on any
+  nested object.
 
 ### Changed
 
@@ -27,10 +65,20 @@ advisory (the project is not published to npm).
 - `CONTRIBUTING.md` test list now documents all five suites — the missing
   `tests/jwks.test.js` bullet was added and the `integration`/`build` bullets
   refreshed for `/metrics` and the default-deny/inspector assertions.
+- Test suite grew from 66 to **75 tests**: live-vs-sim integrity markers,
+  path-flood cap, SSE reconnect idempotence, auth role matrix +
+  fail-closed config, OTLP payload + failure paths, nested-schema
+  validation. New `docs/AUDIT.md` records domain ratings before/after.
+- README gained remote-deployment hardening steps and a troubleshooting
+  table (empty stream after reload, `UNRESOLVED` verdicts, 401/403, Git
+  Bash Docker paths, demo exit codes).
 
 ### Security
 
-- `SECURITY.md` gained **§6** documenting the `/metrics` posture:
+- `SECURITY.md` gained **§7**: the Basic-auth role matrix, fail-closed
+  config handling, the bounded per-path counter state, and the OTLP
+  endpoint posture (operator-set, validated, no redirects, bounded
+  queue). **§6** documents the `/metrics` posture:
   self-excluding telemetry path, bounded low-cardinality labels (no paths,
   IPs, headers, or signature material ever become labels; JWKS results count
   outcomes, not origin URLs), and the no-authentication stance — binding

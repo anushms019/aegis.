@@ -15,7 +15,7 @@
   <a href="https://github.com/anushms/aegis/actions/workflows/ci.yml"><img src="https://github.com/anushms/aegis/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js >= 20" />
-  <img src="https://img.shields.io/badge/tests-66%20passing-success.svg" alt="66 tests passing" />
+  <img src="https://img.shields.io/badge/tests-75%20passing-success.svg" alt="75 tests passing" />
 </p>
 
 ---
@@ -99,11 +99,32 @@ the shadow-burst banner within seconds.
 | `JWKS_ALLOWLIST`  | *(empty — deny all)* | Exact `https://` origins allowed for remote JWKS fetches |
 | `JWKS_PINS`       | *(disabled)* | Per-origin TLS SPKI pins: `origin=sha256/<b64>\|<hex>,…` |
 | `JWKS_CA_FILE`    | *(system roots)* | Extra CA bundle (PEM) for private-PKI JWKS origins |
+| `AEGIS_AUTH_USERS` | *(disabled)* | HTTP Basic auth: `user:pass:role,…` — roles `admin`, `viewer`, `metrics` (`/api/health` stays open for probes) |
+| `OTLP_ENDPOINT`   | *(disabled)* | Collector root (`http://host:4318`) — exports every event as an OTLP span to `/v1/traces` |
+| `OTLP_FLUSH_MS`   | `3000`       | OTLP batch flush interval (50–60000 ms) |
 
 **Prometheus:** `GET /metrics` exposes request counts by kind, verification
-pass/fail ratios, a request-duration histogram, signal counters, and JWKS
-fetch results (text exposition format 0.0.4). The scrape path is telemetry,
+pass/fail ratios, a request-duration histogram, signal counters, auth
+refusals (`aegis_auth_failures_total`), JWKS fetch results, and OTLP export
+results (text exposition format 0.0.4). The scrape path is telemetry,
 so it never inflates what it reports.
+
+**Securing a remote deployment:** the default bind is `127.0.0.1`, which is
+safe for local use. If you set `HOST=0.0.0.0` (containers do), you publish the
+dashboard, the SSE stream and `/metrics` — set `AEGIS_AUTH_USERS` so every
+route except `/api/health` requires HTTP Basic login, with roles:
+
+- `admin` — dashboard, snapshot, SSE, `/metrics`
+- `viewer` — dashboard, snapshot, SSE (scrapers cannot use it for `/metrics`)
+- `metrics` — `/metrics` only (for Prometheus)
+
+```bash
+# example: two viewers, one scraper token, one admin
+AEGIS_AUTH_USERS="ops:s3cret:admin,dash:view:viewer,prom:scr4p3:metrics" node server.js
+```
+
+A malformed entry is dropped and a config with no parseable users denies
+everything — typos fail closed. See [SECURITY.md](SECURITY.md) §7.
 
 **Containers / Kubernetes:**
 
@@ -140,14 +161,14 @@ attempt a live connection).
 ## Testing
 
 ```bash
-npm test        # 66 tests, five suites
+npm test        # 75 tests, five suites
 ```
 
 | Suite | Covers |
 | --- | --- |
 | `tests/verify.test.js` | **RFC 9421 Appendix B.2.6 test vector**, signature-base policy (coverage, freshness, keyring, algorithms), parser edge cases |
 | `tests/jwks.test.js` | backoff math, `JWKS_PINS` parsing + fail-closed pin verification, background-queue gating/dedupe, live HTTPS transport (pin match/mismatch, redirects, size cap, timeout) |
-| `tests/integration.test.js` | the real HTTP server on an ephemeral port: classification, verdict counters, snapshot shape, `/metrics` exposition, SSE hydration + broadcast |
+| `tests/integration.test.js` | the real HTTP server on an ephemeral port: classification, verdict counters, snapshot shape, `/metrics` exposition, SSE hydration + broadcast + reconnect idempotence, per-path cardinality cap, Basic-auth role matrix (fail-closed), OTLP export (payload shape + failure counting) |
 | `tests/server.test.js` | classification contract (known UA matrix, shadow confidence, tool-vs-shadow regressions), nginx/JSON log parsing |
 | `tests/build.test.js` | `index.html` byte-synced to its sources, `src/` ↔ `app.js` bundle round-trip, self-contained page, honesty markers, remote-JWKS SSRF guard (default-deny), WebMCP inspector + schema validator |
 
@@ -178,6 +199,19 @@ SECURITY.md           threat model (SSRF guard, verdict semantics, reporting)
 **Editing workflow:** change `styles.css` or a module in `src/`, run `npm run build`,
 and commit the sources together with regenerated `app.js` and `index.html`. CI
 verifies all four stay consistent.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `port 8788 in use` on start | Another instance is running — `PORT=8789 npm start`, or stop the other process. |
+| Dashboard loads but the event stream is empty | Counters hydrate from the snapshot; the stream table fills with events that arrive **after** the page opened. Run `node scripts/demo-traffic.js` while the page is open. |
+| All signatures show `UNRESOLVED` | The keyring has no matching `kid` — point `JWKS_PATH` at your JWKS (Docker: mount it, see Containers above). Fail-closed by design. |
+| `401` on every page | `AEGIS_AUTH_USERS` is set — send Basic credentials (or remove the variable). `/api/health` never requires auth. |
+| `403` for a valid user | The role does not cover that path: `viewer` cannot read `/metrics`, `metrics` cannot read the dashboard. |
+| Docker on Git Bash: keyring not found | Git Bash rewrites `/app/...` args — prefix `MSYS_NO_PATHCONV=1` (see Containers above). |
+| Demo exits 1 with `scrape check FAILED` | `/metrics` under-counted fired traffic — the accounting check found a real discrepancy; file an issue with the demo output. |
+| Opened `index.html` via `file://` and everything is simulated | Expected: browser pages cannot open an SSE connection — all panels carry `· SIM` labels. Serve via `node server.js` for live capture. |
 
 ## Honest data labeling
 

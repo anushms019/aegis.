@@ -112,6 +112,42 @@ posture:
 `tests/integration.test.js` locks the exposition format and asserts a scrape
 does not bump event counters.
 
+### 7. Access control and bounded telemetry state
+
+**Authentication (optional, HTTP Basic).** Setting
+`AEGIS_AUTH_USERS="user:pass:role,…"` requires login on every route except
+`/api/health` (container and Kubernetes probes must stay unauthenticated and
+reveal only liveness, not telemetry). Roles:
+
+| Role | May access |
+| --- | --- |
+| `admin` | dashboard, static assets, `/api/snapshot`, `/events`, `/metrics` |
+| `viewer` | dashboard, static assets, `/api/snapshot`, `/events` |
+| `metrics` | `/metrics` only |
+
+Properties: credentials are compared as constant-time SHA-256 digests;
+entries with an empty or unknown role are **dropped** and a configuration
+with zero parseable users **denies everything** (a typo fails closed, never
+open); refusals are counted in `aegis_auth_failures_total{result=…}` so brute
+force is observable. The default (variable unset) is open — acceptable only
+on the default `127.0.0.1` bind. **Any non-loopback deployment must set
+`AEGIS_AUTH_USERS` or front the server with an authenticating proxy.**
+
+**Bounded telemetry state.** `counters.byPath` keys are attacker-controlled;
+the map is capped (200 entries, 200-char keys, lowest-count eviction) so a
+unique-path flood cannot grow memory or `/api/snapshot` payloads without
+bound (`tests/integration.test.js` floods it with 251 distinct paths).
+Prometheus labels remain bounded enums (kind, verdict, agent, signal,
+auth/OTLP result) — no path, header, IP or signature material ever becomes a
+label.
+
+**OTLP export (optional).** `OTLP_ENDPOINT` is operator configuration, never
+request-controlled; it is validated to `http(s)://`, redirects are not
+followed, the queue is bounded (1024 spans, drop-oldest), and export failures
+are counted (`aegis_otlp_exports_total`) without ever disturbing capture.
+Spans carry method, path, user agent, client IP, kind and verdict — treat the
+collector as telemetry-equivalent to this server's own logs.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the repository, or email the maintainer via
