@@ -776,6 +776,7 @@ const counters = {
   recent: [], // timestamps for rate
   signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
   jwks: { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 }, // remote key fetches by result
+  authFail: { unauthorized: 0, forbidden: 0 }, // auth refusals (only when AEGIS_AUTH_USERS set)
   latency: { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 },
 };
 
@@ -789,6 +790,7 @@ function resetCounters() {
   counters.recent = [];
   counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
   counters.jwks = { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 };
+  counters.authFail = { unauthorized: 0, forbidden: 0 };
   counters.latency = { buckets: LATENCY_BUCKETS.map(() => 0), sum: 0, count: 0 };
 }
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
@@ -854,6 +856,12 @@ function renderMetrics() {
 
   metric("aegis_agent_requests_total", "Requests attributed to a known agent.", "counter",
     Object.entries(counters.byAgent).map(([k, v]) => `aegis_agent_requests_total{agent="${promEsc(k)}"} ${v}`));
+
+  metric("aegis_auth_failures_total", "Requests refused by dashboard authentication (401) or role check (403).", "counter",
+    [
+      `aegis_auth_failures_total{result="unauthorized"} ${counters.authFail.unauthorized}`,
+      `aegis_auth_failures_total{result="forbidden"} ${counters.authFail.forbidden}`,
+    ]);
 
   metric("aegis_signals_total", "Derived risk-signal counts (IPI, trajectory anomaly, tool calls).", "counter",
     [
@@ -1005,6 +1013,83 @@ const TYPES = {
 };
 const STATIC_FILES = new Set(["index.html", "styles.css", "app.js", "build.js", "server.js"]);
 
+/* ── authentication & RBAC (optional) ─────────────────────────
+   AEGIS_AUTH_USERS="alice:s3cret:admin,bob:view:viewer,scraper:t0k:metrics"
+   Unset (default) → open, which is safe while bound to 127.0.0.1.
+   Set → HTTP Basic on every path except /api/health (container/k8s
+   probes must keep working unauthenticated). Roles:
+     admin   — everything (dashboard, snapshot, SSE, /metrics)
+     viewer  — dashboard, snapshot, SSE (not /metrics)
+     metrics — /metrics only (scrapers)
+   Entry forms: "user:pass:role" or "user:pass" (→ admin). An entry
+   with an unknown or empty role is DROPPED (fail closed), as is a
+   malformed line — a typo can never widen access. Credential
+   comparison is a constant-time digest equality; no plaintext kept. */
+const AUTH_ROLES = ["admin", "viewer", "metrics"];
+function credHash(user, pass) {
+  return crypto.createHash("sha256").update(user + "\u0000" + pass, "utf8").digest();
+}
+function parseAuthUsers(raw) {
+  const users = [];
+  let malformed = 0;
+  for (const entry of raw.split(",")) {
+    const s = entry.trim();
+    if (!s) continue;
+    const first = s.indexOf(":");
+    if (first <= 0) { malformed++; continue; }               // no user or no colon
+    const last = s.lastIndexOf(":");
+    if (last === first) {                                    // exactly "user:pass" → admin
+      const user = s.slice(0, first), pass = s.slice(first + 1);
+      if (pass) users.push({ user, hash: credHash(user, pass), role: "admin" });
+      else malformed++;
+      continue;
+    }
+    if (last === s.length - 1) { malformed++; continue; }    // empty role
+    const user = s.slice(0, first);
+    const pass = s.slice(first + 1, last);
+    const role = s.slice(last + 1);
+    if (!pass || !AUTH_ROLES.includes(role)) { malformed++; continue; }
+    users.push({ user, hash: credHash(user, pass), role });
+  }
+  if (malformed) console.warn(`[auth] ${malformed} malformed AEGIS_AUTH_USERS entr${malformed === 1 ? "y" : "ies"} ignored (fail closed)`);
+  return users;
+}
+let authRaw, authCache;
+function authUsers() {
+  const raw = process.env.AEGIS_AUTH_USERS || "";
+  if (raw !== authRaw) {
+    authRaw = raw;
+    authCache = raw ? parseAuthUsers(raw) : null;
+  }
+  return authCache;
+}
+/* Returns 0 = authorized, 401 = missing/invalid credentials,
+   403 = authenticated but the role does not cover this path. */
+function checkAuth(req, pathname) {
+  const users = authUsers();
+  if (users === null) return 0;                // auth disabled
+  if (pathname === "/api/health") return 0;    // probes stay open
+  let candidate = null;
+  const hdr = req.headers.authorization || "";
+  if (/^Basic /i.test(hdr)) {
+    try {
+      const dec = Buffer.from(hdr.slice(6).trim(), "base64").toString("utf8");
+      const ci = dec.indexOf(":");
+      if (ci >= 0) candidate = credHash(dec.slice(0, ci), dec.slice(ci + 1));
+    } catch (_) { candidate = null; }
+  }
+  if (candidate === null) return 401;
+  let matched = null;
+  for (const u of users) {
+    if (crypto.timingSafeEqual(u.hash, candidate)) { matched = u; break; }
+  }
+  if (!matched) return 401;
+  const needsMetrics = pathname === "/metrics";
+  const covered = matched.role === "admin" ||
+    (needsMetrics ? matched.role === "metrics" : matched.role === "viewer");
+  return covered ? 0 : 403;
+}
+
 /* ── HTTP server ────────────────────────────────────────── */
 const server = http.createServer((req, res) => {
   const started = process.hrtime.bigint();
@@ -1020,6 +1105,26 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, clients: clients.size, total: counters.total }));
     finish(200);
+    return;
+  }
+
+  // authentication + RBAC — no-op unless AEGIS_AUTH_USERS is set
+  const authVerdict = checkAuth(req, pathname);
+  if (authVerdict) {
+    if (authVerdict === 401) {
+      counters.authFail.unauthorized++;
+      res.writeHead(401, {
+        "www-authenticate": 'Basic realm="AEGIS", charset="UTF-8"',
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end("authentication required\n");
+    } else {
+      counters.authFail.forbidden++;
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+      res.end("forbidden\n");
+    }
+    finish(authVerdict);
     return;
   }
 
@@ -1212,6 +1317,12 @@ if (require.main === module) {
     startJwksRefresher();
     console.log(`[keys] remote JWKS allowlist: ${jwksAllowlist().join(", ")} (background refresher on)`);
     if (jwksPins().size) console.log(`[keys] TLS SPKI pins configured for ${jwksPins().size} origin(s)`);
+  }
+  if (authUsers()) {
+    const us = authUsers();
+    console.log(`[auth] enabled — ${us.length} user(s), roles: ${[...new Set(us.map((u) => u.role))].join(", ")}`);
+  } else {
+    console.log("[auth] disabled (set AEGIS_AUTH_USERS to require login — required for any non-loopback bind)");
   }
   server.listen(PORT, HOST, () => {
     console.log(`AEGIS capture server → http://${HOST}:${PORT}`);

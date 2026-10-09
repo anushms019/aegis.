@@ -243,3 +243,64 @@ test("reconnecting SSE re-hydrates absolute counters without double counting", a
   assert.equal(a.total, b.total, "hydration totals must be idempotent across reconnects");
   assert.equal(snapshot().total, b.total, "hydration must mirror server counters exactly");
 });
+
+/* ── authentication & RBAC ──────────────────────────────── */
+const basic = (u, p) => ({ authorization: "Basic " + Buffer.from(u + ":" + p).toString("base64") });
+
+test("AEGIS_AUTH_USERS enables HTTP Basic auth with role-based access", async () => {
+  process.env.AEGIS_AUTH_USERS =
+    "adminUser:adm:admin,viewerUser:vew:viewer,scrapeR:srp:metrics,badRole:pwd:notarole";
+  try {
+    // probes stay open so container healthchecks keep working
+    assert.equal((await fetch(base + "/api/health")).status, 200);
+
+    // no credentials → 401 with a Basic challenge
+    const r401 = await fetch(base + "/");
+    assert.equal(r401.status, 401);
+    assert.match(r401.headers.get("www-authenticate") || "", /Basic/);
+    assert.equal(r401.headers.get("cache-control"), "no-store");
+
+    // wrong password → 401
+    assert.equal((await fetch(base + "/", { headers: basic("adminUser", "nope") })).status, 401);
+
+    // an entry with an unknown role is dropped — a typo fails closed
+    assert.equal((await fetch(base + "/", { headers: basic("badRole", "pwd") })).status, 401);
+
+    // viewer: dashboard and snapshot yes, /metrics no
+    assert.equal((await fetch(base + "/", { headers: basic("viewerUser", "vew") })).status, 200);
+    assert.equal((await fetch(base + "/api/snapshot", { headers: basic("viewerUser", "vew") })).status, 200);
+    assert.equal((await fetch(base + "/metrics", { headers: basic("viewerUser", "vew") })).status, 403);
+
+    // metrics role: /metrics only
+    assert.equal((await fetch(base + "/metrics", { headers: basic("scrapeR", "srp") })).status, 200);
+    assert.equal((await fetch(base + "/", { headers: basic("scrapeR", "srp") })).status, 403);
+
+    // admin: everything
+    assert.equal((await fetch(base + "/metrics", { headers: basic("adminUser", "adm") })).status, 200);
+    assert.equal((await fetch(base + "/api/snapshot", { headers: basic("adminUser", "adm") })).status, 200);
+    assert.equal((await fetch(base + "/", { headers: basic("adminUser", "adm") })).status, 200);
+
+    // refusals are observable to operators via /metrics
+    const m = await (await fetch(base + "/metrics", { headers: basic("adminUser", "adm") })).text();
+    assert.match(m, /aegis_auth_failures_total\{result="unauthorized"\} [1-9]/);
+    assert.match(m, /aegis_auth_failures_total\{result="forbidden"\} [1-9]/);
+  } finally {
+    delete process.env.AEGIS_AUTH_USERS;
+  }
+});
+
+test("malformed AEGIS_AUTH_USERS fails closed", async () => {
+  process.env.AEGIS_AUTH_USERS = "garbage-without-colon";
+  try {
+    assert.equal((await fetch(base + "/")).status, 401, "config with zero parseable users must deny");
+    assert.equal((await fetch(base + "/api/health")).status, 200, "probes stay open");
+  } finally {
+    delete process.env.AEGIS_AUTH_USERS;
+  }
+});
+
+test("auth disabled (default) leaves every route open", async () => {
+  delete process.env.AEGIS_AUTH_USERS;
+  assert.equal((await fetch(base + "/")).status, 200);
+  assert.equal((await fetch(base + "/metrics")).status, 200);
+});
