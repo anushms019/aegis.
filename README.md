@@ -21,11 +21,15 @@
 
 ## What's real vs. simulated
 
-Everything in `server.js` is real: request classification, RFC 9421 signature
+The core of `server.js` is real: request classification, RFC 9421 signature
 verification against your own JWKS keyring (spec-tested against the Appendix
 B.2.6 vector), the ±120 s freshness window, SSRF-guarded remote key
 resolution, `/metrics`, SSE streaming, Basic-auth RBAC and OTLP export — all
-covered by the test suites. The console's editorial panels are **simulated**
+covered by the test suites. The derived signals are honest heuristics, not
+learned detections: IPI is a regex match over the URL path and query,
+`trajectory` fires on any path outside a small built-in scope list, and
+`revenue` is a flat $0.0042 credited per valid signature. The console's
+editorial panels are **simulated**
 when no capture server is attached (or when you open `index.html` via
 `file://`): the world map, regional-share bars, trajectory stream, IPI feed,
 shadow matrix, market-context figures and the ticker model research findings
@@ -248,6 +252,10 @@ The server never fetches URLs found in `keyid` or `Signature-Agent` headers by
 default — remote JWKS fetching is default-deny behind an operator allowlist,
 with optional TLS SPKI pinning, exponential backoff, and bounded size/time/rate.
 See [SECURITY.md](SECURITY.md) for the full threat model and reporting process.
+
+`X-Forwarded-For` is read as-is for display and classification — a directly
+connected client can spoof it, so treat logged client addresses as unverified
+unless your reverse proxy overwrites the header.
 
 ## References
 

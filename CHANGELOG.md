@@ -46,7 +46,14 @@ advisory (the project is not published to npm).
   thinking-pause charts as illustrative SIM series. The internal signal
   key `trajad` became `traj` (`aegis_signals_total{signal="traj"}`). A
   build test now fails the build if any of these claims reappear; the
-  suite now totals 77 tests across five suites.
+  suite now totals 78 tests across five suites.
+- **Remaining untagged invented content labeled** — the section 8 threat
+  cards, capability-budget bars, market-context figures and
+  concealment-rate bars now carry SIM tags; the fabricated "▲32% YoY"
+  stat was dropped from the section header and the ticker. README now
+  states what the derived signals actually are (a regex over path/query,
+  a scope-list check, a flat $0.0042 per valid signature) and warns that
+  `X-Forwarded-For` is trusted as-is.
 - `package.json` version bumped from 1.0.0 to **3.0.0** to match this
   changelog (the package is advisory — AEGIS is not published to npm).
 - `CONTRIBUTING.md` test list now documents all five suites — the missing
@@ -68,6 +75,13 @@ advisory (the project is not published to npm).
   whitelist — a running instance previously handed out its own source.
   An integration test asserts 404 for both while the dashboard assets
   keep serving.
+- **Verification panel reports what happened, not invented pipelines** —
+  live-mode outcomes no longer claim a "behavioral-biometrics track",
+  "identity-registry (unsigned) track", or "rejected at the edge"; they
+  state the actual classification (`classified as shadow: unsigned +
+  headless UA`, `classified: INVALID`, `classified as known …`). The SIM
+  loop's "agent identity registry" step became a local-keyring comparison.
+  A build test fails if the invented-track language returns.
 
 - **Live-vs-simulated data integrity (audit's top finding).** The clock
   mixed a UTC date with a local time-of-day under a "UTC" label; live
@@ -94,6 +108,11 @@ advisory (the project is not published to npm).
 
 ### Security
 
+- **CORS wildcard removed** — `/events` and `/api/snapshot` no longer send
+  `access-control-allow-origin: *`. The dashboard is same-origin, so the
+  header bought nothing while allowing any website to read live data from
+  a script running in the visitor's browser against a loopback capture
+  server. An integration test now asserts the header is absent.
 - `SECURITY.md` gained **§7**: the Basic-auth role matrix, fail-closed
   config handling, the bounded per-path counter state, and the OTLP
   endpoint posture (operator-set, validated, no redirects, bounded
