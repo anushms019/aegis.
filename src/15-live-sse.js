@@ -73,7 +73,7 @@ function markLabelsLive() {
   setLab("#kpi-shadow", "Shadow Agents Detected · live");
   // signal cards become real server counters — rename honestly and
   // drop the fabricated trend deltas
-  setLab("#kpi-anom", "TrajAD-flagged events · live");
+  setLab("#kpi-anom", "Trajectory-flagged events · live");
   setLab("#kpi-ipi", "IPI-flagged requests · live");
   setLab("#kpi-rev", "Crawler revenue signals · live");
   const d = (id) => { const el = $(id); if (el) el.textContent = ""; };
@@ -341,23 +341,23 @@ function ingestReal(ev) {
 }
 
 /* Panels 04–09 consume real server-derived signals instead of only
-   simulating: IPI injections, TrajAD halts, MCP tool calls, revenue. */
+   simulating: IPI injections, trajectory-guard halts, MCP tool calls, revenue. */
 function applyRealSignals(ev) {
   const sg = ev.signals;
   if (!sg) return;
-  live.signals = live.signals || { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  live.signals = live.signals || { ipi: 0, traj: 0, toolCalls: 0, revenue: 0 };
 
   if (sg.ipi) {
     live.signals.ipi++;
     addIpiRowReal(ev, sg.ipi);
   }
-  if (sg.trajad) {
-    live.signals.trajad++;
-    // the TrajAD console keeps running its SIM loop, so a real signal
+  if (sg.traj) {
+    live.signals.traj++;
+    // the trajectory console keeps running its SIM loop, so a real signal
     // must announce itself as live instead of blending in
-    addTrace("ANOMALY", "LIVE · " + sg.trajad, true);
-    const st = $("#trajad-state");
-    if (st) { st.textContent = "TrajAD: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200); }
+    addTrace("ANOMALY", "LIVE · " + sg.traj, true);
+    const st = $("#guard-state");
+    if (st) { st.textContent = "Guard: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200); }
   }
   if (sg.toolCall) {
     live.signals.toolCalls++;

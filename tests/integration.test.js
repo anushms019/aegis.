@@ -378,3 +378,16 @@ test("OTLP export failures are counted, never thrown", async () => {
     delete process.env.OTLP_ENDPOINT;
   }
 });
+
+/* ── static-file whitelist ──────────────────────────────── */
+
+test("server and build source are never downloadable (source-leak guard)", async () => {
+  for (const f of ["/server.js", "/build.js"]) {
+    assert.equal((await fetch(base + f)).status, 404, `${f} must not be served from a running instance`);
+  }
+  // the browser's own assets must still work
+  const app = await fetch(base + "/app.js");
+  assert.equal(app.status, 200, "the dashboard bundle must still be served");
+  assert.match(app.headers.get("content-type") || "", /javascript/);
+  assert.equal((await fetch(base + "/")).status, 200, "dashboard must still be served");
+});

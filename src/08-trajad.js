@@ -1,4 +1,4 @@
-/* ─────────────── Trajectory stream (TrajAD) ────────────── */
+/* ─────────────── Trajectory stream (sim console) ───────── */
 const traceStream = $("#trace-stream");
 let tracePaused = false;
 let toolCalls = 0, compactions = 0, tokens = 41200;
@@ -35,9 +35,9 @@ const OBSERVATIONS = [
   "scroll position 1240 · viewport stability 98%",
 ];
 const ANOMALIES = [
-  "TrajAD: trajectory deviated — product search → /admin/login portal. HALTED before step.",
-  "TrajAD: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
-  "TrajAD: destination host not in mission scope. ROLLBACK queued.",
+  "Trajectory guard: trajectory deviated — product search → /admin/login portal. HALTED before step.",
+  "Trajectory guard: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
+  "Trajectory guard: destination host not in mission scope. ROLLBACK queued.",
 ];
 
 function addTrace(phase, text, alert = false) {
@@ -83,10 +83,10 @@ function traceTick() {
     // simulated anomaly: fires only while the console runs as simulation
     addTrace("ANOMALY", pick(ANOMALIES), true);
     kpi.anom++;
-    const st = $("#trajad-state");
-    st.textContent = "TrajAD: HALT ISSUED";
+    const st = $("#guard-state");
+    st.textContent = "Guard: HALT ISSUED";
     st.className = "badge bad";
-    setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200);
+    setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200);
   }
 
   tokens += rndi(400, 2400);

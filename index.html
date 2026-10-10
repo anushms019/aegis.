@@ -528,7 +528,7 @@ footer {
     <div class="delta down" id="kpi-shadow-d">▲ 0%</div>
   </div>
   <div class="kpi" style="--accent:var(--amber)">
-    <div class="label">TrajAD Anomalies</div>
+    <div class="label">Trajectory Anomalies</div>
     <div class="value" id="kpi-anom">—</div>
     <div class="delta flat" id="kpi-anom-d">—</div>
   </div>
@@ -578,14 +578,14 @@ footer {
 <div class="section-head">
   <span class="idx">01</span>
   <h2>Global Ingress Telemetry</h2>
-  <span class="note">Real-time agent entry points across 5 regional ingestion clusters</span>
+  <span class="note">Modeled agent entry points · simulated (SIM)</span>
 </div>
 
 <div class="grid g-21">
   <div class="panel">
     <div class="panel-head">
       <h3>Worldwide Agent Activity</h3>
-      <span class="tag">Geo-distributed edge sensors</span>
+      <span class="tag">SIM · modeled entry points</span>
       <div class="right"><span class="badge cyan" id="map-rate">— req/s</span></div>
     </div>
     <div class="panel-body map-wrap">
@@ -637,13 +637,14 @@ footer {
     <div class="panel-body">
       <div id="region-bars"></div>
       <div class="stat-inline" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
-        <div class="s"><div class="l">Edge PoPs</div><div class="n">42</div></div>
-        <div class="s"><div class="l">Kafka Partitions</div><div class="n">1,152</div></div>
-        <div class="s"><div class="l">Flink Slots</div><div class="n">384</div></div>
+        <div class="s"><div class="l">Transport</div><div class="n">SSE</div></div>
+        <div class="s"><div class="l">Store</div><div class="n">in-memory</div></div>
+        <div class="s"><div class="l">Dependencies</div><div class="n">0</div></div>
       </div>
       <div class="dim" style="margin-top:12px;font-size:11.5px;line-height:1.6">
-        Stream pipeline: edge collectors → Kafka → Flink stateful windows → ClickHouse analytical store.
-        Median ingest-to-dashboard latency <span class="mono" style="color:var(--cyan)">310 ms</span>.
+        <span class="mono" style="color:var(--amber)">SIM</span> The share bars are simulated market modeling.
+        The real pipeline is one Node process: HTTP ingest → in-memory counters → SSE → this page —
+        no message brokers, no external database, no edge fleet.
       </div>
     </div>
   </div>
@@ -805,7 +806,7 @@ footer {
 
 <div class="grid g-3" style="margin-top:12px">
   <div class="panel">
-    <div class="panel-head"><h3>isTrusted Analysis</h3></div>
+    <div class="panel-head"><h3>isTrusted Histogram</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body">
       <canvas class="chart" id="chart-istrusted" height="150" role="img" aria-label="Is-trusted verdict chart" tabindex="0"></canvas>
       <div class="dim" style="font-size:11.5px;margin-top:8px">
@@ -815,7 +816,7 @@ footer {
     </div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h3>Trajectory Entropy</h3></div>
+    <div class="panel-head"><h3>Trajectory Entropy</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body">
       <canvas class="chart" id="chart-entropy" height="150" role="img" aria-label="Trajectory entropy chart" tabindex="0"></canvas>
       <div class="dim" style="font-size:11.5px;margin-top:8px">
@@ -825,7 +826,7 @@ footer {
     </div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h3>Thinking-Pause Fingerprint</h3></div>
+    <div class="panel-head"><h3>Thinking-Pause Fingerprint</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body">
       <canvas class="chart" id="chart-pause" height="150" role="img" aria-label="Pause-behavior chart" tabindex="0"></canvas>
       <div class="dim" style="font-size:11.5px;margin-top:8px">
@@ -840,7 +841,7 @@ footer {
 <div class="section-head">
   <span class="idx">04</span>
   <h2>Execution Trajectory · Thought → Action → Observation</h2>
-  <span class="note">TrajAD continuous anomaly validation</span>
+  <span class="note">Simulated trajectory anomaly validation (SIM)</span>
 </div>
 
 <div class="grid g-21">
@@ -850,7 +851,7 @@ footer {
       <span class="tag" id="trace-session">session: —</span>
       <div class="right">
         <button class="btn active" id="btn-pause">⏸ Pause</button>
-        <span class="badge ok" id="trajad-state">TrajAD: ARMED</span>
+        <span class="badge ok" id="guard-state">Guard: ARMED</span>
       </div>
     </div>
     <div class="panel-body tight">
@@ -1028,7 +1029,7 @@ footer {
       <h3>IPI Payload Stream</h3>
       <div class="right">
         <span class="badge bad" id="ipi-rate">—</span>
-        <button class="btn" id="btn-rules">Rule of Two: ENFORCED</button>
+        <button class="btn" id="btn-rules">Dual-gate checks · SIM</button>
       </div>
     </div>
     <div class="panel-body tight scroll" style="max-height:340px">
@@ -1059,7 +1060,7 @@ footer {
     </div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h3>Rule of Two Gates</h3></div>
+    <div class="panel-head"><h3>Dual-Gate Checks</h3><span class="tag">SIM</span></div>
     <div class="panel-body">
       <div class="verify-loop" style="flex-direction:column;align-items:stretch;gap:8px">
         <span class="hop active">① Untrusted input isolated from tool planner</span>
@@ -1101,7 +1102,7 @@ footer {
 </main>
 
 <footer>
-  AEGIS // ORBITAL — Global AI Agent Observability Console · simulated telemetry demo · RFC 9421 / Web Bot Auth / WebMCP / TrajAD
+  AEGIS // ORBITAL — Global AI Agent Observability Console · simulated telemetry demo · RFC 9421 / Web Bot Auth / WebMCP / trajectory monitor
 </footer>
 
 <!-- ══ WebMCP schema inspector (opens from any ledger row) ══ -->
@@ -1221,7 +1222,7 @@ function renderKpis() {
     // live.signals comes straight from the snapshot — no simulated
     // baseline (the old `1247 + signals.ipi` mix) is added.
     const sg = live.signals || {};
-    $("#kpi-anom").textContent = fmtInt(sg.trajad || 0);
+    $("#kpi-anom").textContent = fmtInt(sg.traj || 0);
     $("#kpi-ipi").textContent = fmtInt(sg.ipi || 0);
     $("#kpi-rev").textContent = fmtMoney(sg.revenue || 0);
   } else {
@@ -1461,7 +1462,7 @@ const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit
 const SIGNALS = [
   ["isTrusted dispatch cadence", 97],
   ["JA4+ TLS fingerprint drift", 91],
-  ["Canvas hash persistence across 9 regions", 99],
+  ["canvas fingerprint reuse", 99],
   ["Bézier jitter regularity", 88],
   ["CDP attach timing residual", 94],
   ["Fitts-law dwell mismatch", 86],
@@ -1607,7 +1608,7 @@ function drawPause() {
 drawIsTrusted(); drawEntropy(); drawPause();
 window.addEventListener("resize", () => { drawIsTrusted(); drawEntropy(); drawPause(); drawContext(); drawCep(); drawRevenue(); });
 
-/* ─────────────── Trajectory stream (TrajAD) ────────────── */
+/* ─────────────── Trajectory stream (sim console) ───────── */
 const traceStream = $("#trace-stream");
 let tracePaused = false;
 let toolCalls = 0, compactions = 0, tokens = 41200;
@@ -1644,9 +1645,9 @@ const OBSERVATIONS = [
   "scroll position 1240 · viewport stability 98%",
 ];
 const ANOMALIES = [
-  "TrajAD: trajectory deviated — product search → /admin/login portal. HALTED before step.",
-  "TrajAD: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
-  "TrajAD: destination host not in mission scope. ROLLBACK queued.",
+  "Trajectory guard: trajectory deviated — product search → /admin/login portal. HALTED before step.",
+  "Trajectory guard: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
+  "Trajectory guard: destination host not in mission scope. ROLLBACK queued.",
 ];
 
 function addTrace(phase, text, alert = false) {
@@ -1692,10 +1693,10 @@ function traceTick() {
     // simulated anomaly: fires only while the console runs as simulation
     addTrace("ANOMALY", pick(ANOMALIES), true);
     kpi.anom++;
-    const st = $("#trajad-state");
-    st.textContent = "TrajAD: HALT ISSUED";
+    const st = $("#guard-state");
+    st.textContent = "Guard: HALT ISSUED";
     st.className = "badge bad";
-    setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200);
+    setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200);
   }
 
   tokens += rndi(400, 2400);
@@ -2301,15 +2302,15 @@ setInterval(() => {
 function buildTicker() {
   const items = [
     "<b>Web Bot Auth</b> verification pass rate 99.66%",
-    "<span class='bad'>shadow agent</span> cluster: patched Chromium, 9-region canvas persistence",
-    "<b>TrajAD</b> halted 3 trajectories in last hour",
+    "<span class='bad'>shadow agent</span> cluster: patched Chromium, reused canvas fingerprint",
+    "<b>Trajectory guard</b> halted 3 trajectories in last hour",
     "<span class='warn'>IPI payloads ▲32% YoY</span> — JSON-LD abuse fastest-growing vector",
     "<b>Pay Per Crawl</b> settle volume " + fmtMoney(kpi.rev) + " today",
     "<b>WebMCP</b> tools discovered: " + fmtInt(mcpAll) + " this session",
     "APAC leads ingest share at 40.1% · NA 39.4% · EMEA 17.2%",
-    "<span class='bad'>isTrusted spoofing</span> defeated by trajectory entropy scoring",
+    "<span class='bad'>isTrusted spoofing</span> — detection theme this demo models",
     "<b>GEO</b> citation uplift +38% for structured-quote pages",
-    "median ingest→dashboard latency 310ms across 42 edge PoPs",
+    "single-process ingest: HTTP → in-memory counters → SSE → dashboard",
   ];
   const line = items.join(" &nbsp;·&nbsp; ") + " &nbsp;·&nbsp; ";
   // editorial/demo content — always labeled so it can't read as telemetry
@@ -2628,7 +2629,7 @@ function markLabelsLive() {
   setLab("#kpi-shadow", "Shadow Agents Detected · live");
   // signal cards become real server counters — rename honestly and
   // drop the fabricated trend deltas
-  setLab("#kpi-anom", "TrajAD-flagged events · live");
+  setLab("#kpi-anom", "Trajectory-flagged events · live");
   setLab("#kpi-ipi", "IPI-flagged requests · live");
   setLab("#kpi-rev", "Crawler revenue signals · live");
   const d = (id) => { const el = $(id); if (el) el.textContent = ""; };
@@ -2896,23 +2897,23 @@ function ingestReal(ev) {
 }
 
 /* Panels 04–09 consume real server-derived signals instead of only
-   simulating: IPI injections, TrajAD halts, MCP tool calls, revenue. */
+   simulating: IPI injections, trajectory-guard halts, MCP tool calls, revenue. */
 function applyRealSignals(ev) {
   const sg = ev.signals;
   if (!sg) return;
-  live.signals = live.signals || { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  live.signals = live.signals || { ipi: 0, traj: 0, toolCalls: 0, revenue: 0 };
 
   if (sg.ipi) {
     live.signals.ipi++;
     addIpiRowReal(ev, sg.ipi);
   }
-  if (sg.trajad) {
-    live.signals.trajad++;
-    // the TrajAD console keeps running its SIM loop, so a real signal
+  if (sg.traj) {
+    live.signals.traj++;
+    // the trajectory console keeps running its SIM loop, so a real signal
     // must announce itself as live instead of blending in
-    addTrace("ANOMALY", "LIVE · " + sg.trajad, true);
-    const st = $("#trajad-state");
-    if (st) { st.textContent = "TrajAD: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200); }
+    addTrace("ANOMALY", "LIVE · " + sg.traj, true);
+    const st = $("#guard-state");
+    if (st) { st.textContent = "Guard: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200); }
   }
   if (sg.toolCall) {
     live.signals.toolCalls++;

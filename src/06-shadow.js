@@ -3,7 +3,7 @@ const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit
 const SIGNALS = [
   ["isTrusted dispatch cadence", 97],
   ["JA4+ TLS fingerprint drift", 91],
-  ["Canvas hash persistence across 9 regions", 99],
+  ["canvas fingerprint reuse", 99],
   ["Bézier jitter regularity", 88],
   ["CDP attach timing residual", 94],
   ["Fitts-law dwell mismatch", 86],

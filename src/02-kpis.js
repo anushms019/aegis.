@@ -30,7 +30,7 @@ function renderKpis() {
     // live.signals comes straight from the snapshot — no simulated
     // baseline (the old `1247 + signals.ipi` mix) is added.
     const sg = live.signals || {};
-    $("#kpi-anom").textContent = fmtInt(sg.trajad || 0);
+    $("#kpi-anom").textContent = fmtInt(sg.traj || 0);
     $("#kpi-ipi").textContent = fmtInt(sg.ipi || 0);
     $("#kpi-rev").textContent = fmtMoney(sg.revenue || 0);
   } else {

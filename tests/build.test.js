@@ -287,8 +287,8 @@ test("live-vs-sim integrity: honest clock, no baseline mixing, no fabricated tre
   // shared ledgers: sim row generators pause while a live capture is on
   assert.ok(app.includes("if (!liveMode) addMcpRow()"), "MCP sim rows must pause in live mode");
   assert.ok(app.includes("if (!liveMode) addIpiRow()"), "IPI sim rows must pause in live mode");
-  // real rows announce themselves inside the SIM TrajAD console
-  assert.ok(app.includes('"LIVE · " + sg.trajad'), "a real TrajAD signal must be marked LIVE inside the sim console");
+  // real rows announce themselves inside the SIM trajectory console
+  assert.ok(app.includes('"LIVE · " + sg.traj'), "a real trajectory-guard signal must be marked LIVE inside the sim console");
 
   // honesty: the UI must not claim a Content-Digest verification the
   // server never performs (it enforces the ±120 s freshness window only)
@@ -300,4 +300,27 @@ test("live-vs-sim integrity: honest clock, no baseline mixing, no fabricated tre
 
   // duplicate SSE frames are dropped before any counter moves
   assert.ok(app.includes("seenEvents"), "event dedupe guard missing from the live feed");
+});
+
+test("dashboard ships no fabricated-infrastructure or unimplemented-capability claims", () => {
+  const html = read("index.html");
+  const app = read("app.js");
+  // Claims no reviewer can verify from this repository: invented
+  // infrastructure (brokers, partitions, edge fleet, latency numbers)
+  // and branding for capabilities the code does not implement.
+  const banned = [
+    /edge PoP/i, /Kafka/, /Flink/, /ClickHouse/,
+    /310\s?ms/, /42 edge/i, /9[- ]region/i,
+    /TrajAD/, /Rule of Two/, /Canvas hash persistence/i,
+  ];
+  for (const re of banned) {
+    assert.ok(!re.test(html), `index.html still matches unverifiable claim ${re}`);
+    assert.ok(!re.test(app), `app.js still matches unverifiable claim ${re}`);
+  }
+  // the console must state its real architecture somewhere visible
+  assert.ok(html.includes("in-memory counters"), "real-pipeline description missing from the console");
+  assert.ok(html.includes("Guard: ARMED"), "renamed trajectory-guard badge missing");
+  // the renamed signal key must be consistent end to end
+  assert.ok(app.includes("sg.traj"), "renamed trajectory signal key missing from bundle");
+  assert.ok(!app.includes("trajad"), "old trajad signal key still referenced in bundle");
 });

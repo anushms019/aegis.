@@ -75,7 +75,7 @@ function renderKpis() {
     // live.signals comes straight from the snapshot — no simulated
     // baseline (the old `1247 + signals.ipi` mix) is added.
     const sg = live.signals || {};
-    $("#kpi-anom").textContent = fmtInt(sg.trajad || 0);
+    $("#kpi-anom").textContent = fmtInt(sg.traj || 0);
     $("#kpi-ipi").textContent = fmtInt(sg.ipi || 0);
     $("#kpi-rev").textContent = fmtMoney(sg.revenue || 0);
   } else {
@@ -315,7 +315,7 @@ const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit
 const SIGNALS = [
   ["isTrusted dispatch cadence", 97],
   ["JA4+ TLS fingerprint drift", 91],
-  ["Canvas hash persistence across 9 regions", 99],
+  ["canvas fingerprint reuse", 99],
   ["Bézier jitter regularity", 88],
   ["CDP attach timing residual", 94],
   ["Fitts-law dwell mismatch", 86],
@@ -461,7 +461,7 @@ function drawPause() {
 drawIsTrusted(); drawEntropy(); drawPause();
 window.addEventListener("resize", () => { drawIsTrusted(); drawEntropy(); drawPause(); drawContext(); drawCep(); drawRevenue(); });
 
-/* ─────────────── Trajectory stream (TrajAD) ────────────── */
+/* ─────────────── Trajectory stream (sim console) ───────── */
 const traceStream = $("#trace-stream");
 let tracePaused = false;
 let toolCalls = 0, compactions = 0, tokens = 41200;
@@ -498,9 +498,9 @@ const OBSERVATIONS = [
   "scroll position 1240 · viewport stability 98%",
 ];
 const ANOMALIES = [
-  "TrajAD: trajectory deviated — product search → /admin/login portal. HALTED before step.",
-  "TrajAD: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
-  "TrajAD: destination host not in mission scope. ROLLBACK queued.",
+  "Trajectory guard: trajectory deviated — product search → /admin/login portal. HALTED before step.",
+  "Trajectory guard: hidden text node (display:none) injected instruction attempting tool escalation. BLOCKED.",
+  "Trajectory guard: destination host not in mission scope. ROLLBACK queued.",
 ];
 
 function addTrace(phase, text, alert = false) {
@@ -546,10 +546,10 @@ function traceTick() {
     // simulated anomaly: fires only while the console runs as simulation
     addTrace("ANOMALY", pick(ANOMALIES), true);
     kpi.anom++;
-    const st = $("#trajad-state");
-    st.textContent = "TrajAD: HALT ISSUED";
+    const st = $("#guard-state");
+    st.textContent = "Guard: HALT ISSUED";
     st.className = "badge bad";
-    setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200);
+    setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200);
   }
 
   tokens += rndi(400, 2400);
@@ -1155,15 +1155,15 @@ setInterval(() => {
 function buildTicker() {
   const items = [
     "<b>Web Bot Auth</b> verification pass rate 99.66%",
-    "<span class='bad'>shadow agent</span> cluster: patched Chromium, 9-region canvas persistence",
-    "<b>TrajAD</b> halted 3 trajectories in last hour",
+    "<span class='bad'>shadow agent</span> cluster: patched Chromium, reused canvas fingerprint",
+    "<b>Trajectory guard</b> halted 3 trajectories in last hour",
     "<span class='warn'>IPI payloads ▲32% YoY</span> — JSON-LD abuse fastest-growing vector",
     "<b>Pay Per Crawl</b> settle volume " + fmtMoney(kpi.rev) + " today",
     "<b>WebMCP</b> tools discovered: " + fmtInt(mcpAll) + " this session",
     "APAC leads ingest share at 40.1% · NA 39.4% · EMEA 17.2%",
-    "<span class='bad'>isTrusted spoofing</span> defeated by trajectory entropy scoring",
+    "<span class='bad'>isTrusted spoofing</span> — detection theme this demo models",
     "<b>GEO</b> citation uplift +38% for structured-quote pages",
-    "median ingest→dashboard latency 310ms across 42 edge PoPs",
+    "single-process ingest: HTTP → in-memory counters → SSE → dashboard",
   ];
   const line = items.join(" &nbsp;·&nbsp; ") + " &nbsp;·&nbsp; ";
   // editorial/demo content — always labeled so it can't read as telemetry
@@ -1482,7 +1482,7 @@ function markLabelsLive() {
   setLab("#kpi-shadow", "Shadow Agents Detected · live");
   // signal cards become real server counters — rename honestly and
   // drop the fabricated trend deltas
-  setLab("#kpi-anom", "TrajAD-flagged events · live");
+  setLab("#kpi-anom", "Trajectory-flagged events · live");
   setLab("#kpi-ipi", "IPI-flagged requests · live");
   setLab("#kpi-rev", "Crawler revenue signals · live");
   const d = (id) => { const el = $(id); if (el) el.textContent = ""; };
@@ -1750,23 +1750,23 @@ function ingestReal(ev) {
 }
 
 /* Panels 04–09 consume real server-derived signals instead of only
-   simulating: IPI injections, TrajAD halts, MCP tool calls, revenue. */
+   simulating: IPI injections, trajectory-guard halts, MCP tool calls, revenue. */
 function applyRealSignals(ev) {
   const sg = ev.signals;
   if (!sg) return;
-  live.signals = live.signals || { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  live.signals = live.signals || { ipi: 0, traj: 0, toolCalls: 0, revenue: 0 };
 
   if (sg.ipi) {
     live.signals.ipi++;
     addIpiRowReal(ev, sg.ipi);
   }
-  if (sg.trajad) {
-    live.signals.trajad++;
-    // the TrajAD console keeps running its SIM loop, so a real signal
+  if (sg.traj) {
+    live.signals.traj++;
+    // the trajectory console keeps running its SIM loop, so a real signal
     // must announce itself as live instead of blending in
-    addTrace("ANOMALY", "LIVE · " + sg.trajad, true);
-    const st = $("#trajad-state");
-    if (st) { st.textContent = "TrajAD: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "TrajAD: ARMED"; st.className = "badge ok"; }, 3200); }
+    addTrace("ANOMALY", "LIVE · " + sg.traj, true);
+    const st = $("#guard-state");
+    if (st) { st.textContent = "Guard: HALT ISSUED"; st.className = "badge bad"; setTimeout(() => { st.textContent = "Guard: ARMED"; st.className = "badge ok"; }, 3200); }
   }
   if (sg.toolCall) {
     live.signals.toolCalls++;

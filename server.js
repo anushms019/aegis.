@@ -774,7 +774,7 @@ const counters = {
   byAgent: {},
   byPath: {},
   recent: [], // timestamps for rate
-  signals: { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 },
+  signals: { ipi: 0, traj: 0, toolCalls: 0, revenue: 0 },
   jwks: { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 }, // remote key fetches by result
   authFail: { unauthorized: 0, forbidden: 0 }, // auth refusals (only when AEGIS_AUTH_USERS set)
   otlp: { ok: 0, error: 0, dropped: 0 }, // OTLP span-batch exports (only when OTLP_ENDPOINT set)
@@ -789,7 +789,7 @@ function resetCounters() {
   counters.byAgent = {};
   counters.byPath = {};
   counters.recent = [];
-  counters.signals = { ipi: 0, trajad: 0, toolCalls: 0, revenue: 0 };
+  counters.signals = { ipi: 0, traj: 0, toolCalls: 0, revenue: 0 };
   counters.jwks = { ok: 0, denied: 0, ratelimited: 0, backoff: 0, error: 0 };
   counters.authFail = { unauthorized: 0, forbidden: 0 };
   counters.otlp = { ok: 0, error: 0, dropped: 0 };
@@ -875,7 +875,7 @@ function renderMetrics() {
   metric("aegis_signals_total", "Derived risk-signal counts (IPI, trajectory anomaly, tool calls).", "counter",
     [
       `aegis_signals_total{signal="ipi"} ${counters.signals.ipi}`,
-      `aegis_signals_total{signal="trajad"} ${counters.signals.trajad}`,
+      `aegis_signals_total{signal="traj"} ${counters.signals.traj}`,
       `aegis_signals_total{signal="tool_call"} ${counters.signals.toolCalls}`,
     ]);
 
@@ -1047,7 +1047,7 @@ function emit(ev) {
   const sg = ev.signals;
   if (sg) {
     if (sg.ipi) counters.signals.ipi++;
-    if (sg.trajad) counters.signals.trajad++;
+    if (sg.traj) counters.signals.traj++;
     if (sg.toolCall) counters.signals.toolCalls++;
     if (sg.revenue) counters.signals.revenue += sg.revenue;
   }
@@ -1085,7 +1085,7 @@ function makeEvent(req, status, ms) {
 /* ── real signals for the secondary panels (04–09) ──────────────────
    Panels that were previously simulated now consume flags derived from
    the actual request: injection-shaped payloads → IPI, out-of-scope or
-   evasive trajectory → TrajAD anomaly, tool/agent traffic → MCP ledger,
+   evasive trajectory → trajectory-guard flag, tool/agent traffic → MCP ledger,
    verified signed crawls → pay-per-crawl revenue. */
 const IPI_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
@@ -1099,10 +1099,10 @@ const IPI_PATTERNS = [
   /(?:^|[^a-z0-9+/=])[A-Za-z0-9+/]{40,}={0,2}(?:[^a-z0-9+/=]|$)/, // long opaque blob
   /--[a-z-]*\s*(?:no-preserve-root|drop-table)/i,
 ];
-const TRAJAD_SCOPE = /^\/(?:api|docs|products|pricing|blog|robots\.txt|\.well-known|index\.html|\?|$)/i;
+const SCOPE_PATH_RE = /^\/(?:api|docs|products|pricing|blog|robots\.txt|\.well-known|index\.html|\?|$)/i;
 
 function deriveSignals(ev, url) {
-  const s = { ipi: null, trajad: null, toolCall: false, revenue: 0 };
+  const s = { ipi: null, traj: null, toolCall: false, revenue: 0 };
   const probe = decodeURIComponent(
     ((ev.path || "") + "?" + (url.search || "")).replace(/\+/g, " ")
   ).slice(0, 1400);
@@ -1116,11 +1116,11 @@ function deriveSignals(ev, url) {
     }
   }
 
-  // TrajAD: evasive or out-of-scope trajectory
+  // trajectory guard: evasive or out-of-scope trajectory
   if (ev.kind === "shadow" && ev.shadow && ev.shadow.conf >= 90) {
-    s.trajad = `evasive trajectory (${ev.shadow.signal}) — HALTED before step`;
-  } else if (!TRAJAD_SCOPE.test(ev.path || "") && ev.kind !== "known" && ev.kind !== "signed") {
-    s.trajad = `destination ${ev.path} not in mission scope — ROLLBACK queued`;
+    s.traj = `evasive trajectory (${ev.shadow.signal}) — HALTED before step`;
+  } else if (!SCOPE_PATH_RE.test(ev.path || "") && ev.kind !== "known" && ev.kind !== "signed") {
+    s.traj = `destination ${ev.path} not in mission scope — ROLLBACK queued`;
   }
 
   // WebMCP ledger: real tool/agent traffic
@@ -1140,7 +1140,9 @@ const TYPES = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
 };
-const STATIC_FILES = new Set(["index.html", "styles.css", "app.js", "build.js", "server.js"]);
+// Only the browser's own assets are served. server.js and build.js are
+// deliberately absent: a running instance must never hand out source.
+const STATIC_FILES = new Set(["index.html", "styles.css", "app.js"]);
 
 /* ── authentication & RBAC (optional) ─────────────────────────
    AEGIS_AUTH_USERS="alice:s3cret:admin,bob:view:viewer,scraper:t0k:metrics"
