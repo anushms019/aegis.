@@ -117,7 +117,7 @@ verifier and test culture are strong, but an unauthenticated console on
 | HTTP Message Signatures / crypto | 8.5 | **8.5** | Untouched (already strongest); UI no longer overclaims digest verification. Still: no nonce store (documented §3). |
 | Data accuracy & live telemetry | 5.5 | **8** | Every mixing/labeling defect from the audit fixed and locked by tests; reconnect idempotence tested. Still: no long-run soak evidence. |
 | Security & privacy | 6 | **7.5** | Auth+RBAC (fail-closed, constant-time), DoS cap on `byPath`, §7 documented. Still: no TLS (proxy required), no rate limiting, no CSP/security headers. |
-| Automated testing & QA | 8 | **8.5** | 75 tests; first coverage of auth, OTLP, floods, reconnect, integrity markers. Still: validator tested via bundle extraction; no detection corpus. |
+| Automated testing & QA | 8 | **8.5** | 77 tests; first coverage of auth, OTLP, floods, reconnect, integrity markers, dashboard-honesty gate, source-leak guard. Still: validator tested via bundle extraction; no detection corpus. |
 | Performance & scalability | 6.5 | **7** | Path map and OTLP queue bounded; histograms O(1). Still: throughput/memory never load-tested (M4 open). |
 | Deployment readiness | 7.5 | **8** | Image gate runs 75/75; auth verified live in-container; probes unchanged. Still: compose lacks a keyring mount; badge slug unverifiable (no remote). |
 | Documentation & maintainability | 8 | **8.5** | SECURITY §7, README hardening + troubleshooting, CHANGELOG, this audit. Still: screenshots predate the inspector modal. |

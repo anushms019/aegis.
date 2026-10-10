@@ -234,7 +234,10 @@ The console distinguishes what it measures from what it models:
 - `LIVE` — real requests captured by `server.js`: KPIs 1–3, the event stream, the rate
   chart, the shadow feed, and every signature verdict. `VALID` means a public-key
   verification actually succeeded against the local keyring; `UNRESOLVED` means the key
-  is unknown — never presented as trusted.- `SIM` — simulation of research findings and market forecasts (GEO citation economics, Pay-Per-Crawl revenue, IPI payload rates, trajectory-guard anomaly volume, the registry table).
+  is unknown — never presented as trusted.
+- `SIM` — simulation of research findings and market forecasts (GEO
+  citation economics, Pay-Per-Crawl revenue, IPI payload rates,
+  trajectory-guard anomaly volume, the registry table).
   Each simulated panel is tagged in the UI.
 
 ## Security

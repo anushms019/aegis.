@@ -31,7 +31,7 @@ advisory (the project is not published to npm).
   OTel collector. Stdlib only (no gRPC — would add a dependency);
   operator-set endpoint, no redirects, 1024-span drop-oldest queue,
   batch 32 / `OTLP_FLUSH_MS` (default 3 s), failures counted in
-  `  aegis_otlp_exports_total` and never disturb capture.
+  `aegis_otlp_exports_total` and never disturb capture.
 
 ### Changed
 
@@ -45,7 +45,22 @@ advisory (the project is not published to npm).
   canvas fingerprint reuse — and tagged the isTrusted / entropy /
   thinking-pause charts as illustrative SIM series. The internal signal
   key `trajad` became `traj` (`aegis_signals_total{signal="traj"}`). A
-  build test now fails the build if any of these claims reappear.
+  build test now fails the build if any of these claims reappear; the
+  suite now totals 77 tests across five suites.
+- `package.json` version bumped from 1.0.0 to **3.0.0** to match this
+  changelog (the package is advisory — AEGIS is not published to npm).
+- `CONTRIBUTING.md` test list now documents all five suites — the missing
+  `tests/jwks.test.js` bullet was added and the `integration`/`build` bullets
+  refreshed for `/metrics` and the default-deny/inspector assertions.
+- The test suite grew from 66 to **77 tests**: live-vs-sim integrity
+  markers, path-flood cap, SSE reconnect idempotence, auth role matrix +
+  fail-closed config, OTLP payload + failure paths, nested-schema
+  validation, the dashboard honesty gate, and the static source-leak
+  guard. New `docs/AUDIT.md` records domain ratings before/after.
+- README gained a "What's real vs. simulated" section, remote-deployment
+  hardening steps, and a troubleshooting table (empty stream after
+  reload, `UNRESOLVED` verdicts, 401/403, Git Bash Docker paths, demo
+  exit codes).
 
 ### Fixed
 
@@ -76,21 +91,6 @@ advisory (the project is not published to npm).
   with `minItems`/`maxItems`, and supports `anyOf`/`allOf`/`oneOf` plus
   `const`/`maxLength`; the previous flat version passed vacuously on any
   nested object.
-
-### Changed
-
-- `package.json` version bumped from 1.0.0 to **3.0.0** to match this
-  changelog (the package is advisory — AEGIS is not published to npm).
-- `CONTRIBUTING.md` test list now documents all five suites — the missing
-  `tests/jwks.test.js` bullet was added and the `integration`/`build` bullets
-  refreshed for `/metrics` and the default-deny/inspector assertions.
-- Test suite grew from 66 to **75 tests**: live-vs-sim integrity markers,
-  path-flood cap, SSE reconnect idempotence, auth role matrix +
-  fail-closed config, OTLP payload + failure paths, nested-schema
-  validation. New `docs/AUDIT.md` records domain ratings before/after.
-- README gained remote-deployment hardening steps and a troubleshooting
-  table (empty stream after reload, `UNRESOLVED` verdicts, 401/403, Git
-  Bash Docker paths, demo exit codes).
 
 ### Security
 
