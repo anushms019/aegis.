@@ -31,9 +31,28 @@ advisory (the project is not published to npm).
   OTel collector. Stdlib only (no gRPC — would add a dependency);
   operator-set endpoint, no redirects, 1024-span drop-oldest queue,
   batch 32 / `OTLP_FLUSH_MS` (default 3 s), failures counted in
-  `aegis_otlp_exports_total` and never disturb capture.
+  `  aegis_otlp_exports_total` and never disturb capture.
+
+### Changed
+
+- **Honesty pass on the dashboard UI** (review feedback): removed the
+  invented infrastructure strip ("42 edge PoPs / Kafka partitions / Flink
+  slots / 310 ms median latency" — none of which exist in this project)
+  and replaced it with the real architecture (one Node process →
+  in-memory counters → SSE); renamed branding that implied unimplemented
+  capabilities — "TrajAD" → trajectory guard, "Rule of Two" → dual-gate
+  checks (tagged SIM), "Canvas hash persistence across 9 regions" →
+  canvas fingerprint reuse — and tagged the isTrusted / entropy /
+  thinking-pause charts as illustrative SIM series. The internal signal
+  key `trajad` became `traj` (`aegis_signals_total{signal="traj"}`). A
+  build test now fails the build if any of these claims reappear.
 
 ### Fixed
+
+- **`server.js` and `build.js` are no longer served** by the static-file
+  whitelist — a running instance previously handed out its own source.
+  An integration test asserts 404 for both while the dashboard assets
+  keep serving.
 
 - **Live-vs-simulated data integrity (audit's top finding).** The clock
   mixed a UTC date with a local time-of-day under a "UTC" label; live

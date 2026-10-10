@@ -15,10 +15,24 @@
   <a href="https://github.com/anushms/aegis/actions/workflows/ci.yml"><img src="https://github.com/anushms/aegis/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js >= 20" />
-  <img src="https://img.shields.io/badge/tests-75%20passing-success.svg" alt="75 tests passing" />
 </p>
 
 ---
+
+## What's real vs. simulated
+
+Everything in `server.js` is real: request classification, RFC 9421 signature
+verification against your own JWKS keyring (spec-tested against the Appendix
+B.2.6 vector), the ±120 s freshness window, SSRF-guarded remote key
+resolution, `/metrics`, SSE streaming, Basic-auth RBAC and OTLP export — all
+covered by the test suites. The console's editorial panels are **simulated**
+when no capture server is attached (or when you open `index.html` via
+`file://`): the world map, regional-share bars, trajectory stream, IPI feed,
+shadow matrix, market-context figures and the ticker model research findings
+with randomly drifting data so the UI has something to show. They are tagged
+`SIM` in the UI; panels fed by the server flip to `LIVE` and render raw
+counters only. If a number is not tagged `LIVE`, it is a demo, not
+telemetry.
 
 AEGIS is a **zero-dependency** observability stack for the agent-filled web:
 
@@ -161,7 +175,7 @@ attempt a live connection).
 ## Testing
 
 ```bash
-npm test        # 75 tests, five suites
+npm test        # five suites (node:test — zero dependencies)
 ```
 
 | Suite | Covers |
@@ -220,9 +234,7 @@ The console distinguishes what it measures from what it models:
 - `LIVE` — real requests captured by `server.js`: KPIs 1–3, the event stream, the rate
   chart, the shadow feed, and every signature verdict. `VALID` means a public-key
   verification actually succeeded against the local keyring; `UNRESOLVED` means the key
-  is unknown — never presented as trusted.
-- `SIM` — simulation of research findings and market forecasts (GEO citation economics,
-  Pay-Per-Crawl revenue, IPI payload rates, TrjAD anomaly volume, the registry table).
+  is unknown — never presented as trusted.- `SIM` — simulation of research findings and market forecasts (GEO citation economics, Pay-Per-Crawl revenue, IPI payload rates, trajectory-guard anomaly volume, the registry table).
   Each simulated panel is tagged in the UI.
 
 ## Security
