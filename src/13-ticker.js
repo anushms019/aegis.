@@ -4,7 +4,7 @@ function buildTicker() {
     "<b>Web Bot Auth</b> verification pass rate 99.66%",
     "<span class='bad'>shadow agent</span> cluster: patched Chromium, reused canvas fingerprint",
     "<b>Trajectory guard</b> halted 3 trajectories in last hour",
-    "<span class='warn'>IPI payloads ▲32% YoY</span> — JSON-LD abuse fastest-growing vector",
+    "<span class='warn'>IPI payload trend</span> — JSON-LD abuse fastest-growing vector (illustrative)",
     "<b>Pay Per Crawl</b> settle volume " + fmtMoney(kpi.rev) + " today",
     "<b>WebMCP</b> tools discovered: " + fmtInt(mcpAll) + " this session",
     "APAC leads ingest share at 40.1% · NA 39.4% · EMEA 17.2%",

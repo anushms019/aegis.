@@ -239,7 +239,7 @@ async function runVerification() {
 <span class="k">signature-input:</span> <span class="badv">(absent)</span>
 <span class="k">signature-agent:</span> <span class="badv">(absent)</span>
 <span class="k">x-forwarded-for:</span> <span class="warnv">rotating · 14 hops · datacenter ASN</span>
-<span class="k">verdict:</span> <span class="badv">→ behavioral scoring path</span>`
+<span class="k">verdict:</span> <span class="badv">→ classified as shadow (unsigned)</span>`
     : `<span class="k">GET</span> ${path}
 <span class="k">signature-input:</span> <span class="v">(:method/:authority/:path);created=${created};expires=${expires};tag="web-bot-auth"</span>
 <span class="k">signature:</span> <span class="v">:${sig.slice(0, 48)}…</span>
@@ -257,7 +257,7 @@ async function runVerification() {
         `fetching JWKS (kid=${ag.kid})`,
         "checking freshness window (±120 s)",
         "Ed25519 signature verification over signature base",
-        "consulting agent identity registry → trust decision",
+        "comparing keyid against the local keyring → verdict",
       ][i]}`;
     await new Promise((r) => setTimeout(r, rndi(140, 320)));
   }
@@ -268,7 +268,7 @@ async function runVerification() {
     verifyState.textContent = "REJECTED";
     verifyState.className = "badge bad";
     $("#verify-log").textContent =
-      `[${nowStamp()}] ✗ no valid signature → escalated to behavioral biometrics pipeline (shadow-agent track)`;
+      `[${nowStamp()}] ✗ no valid signature → classified as shadow: unsigned + headless UA`;
   } else {
     jwksOk++;
     verifyState.textContent = "VERIFIED";
@@ -1157,7 +1157,7 @@ function buildTicker() {
     "<b>Web Bot Auth</b> verification pass rate 99.66%",
     "<span class='bad'>shadow agent</span> cluster: patched Chromium, reused canvas fingerprint",
     "<b>Trajectory guard</b> halted 3 trajectories in last hour",
-    "<span class='warn'>IPI payloads ▲32% YoY</span> — JSON-LD abuse fastest-growing vector",
+    "<span class='warn'>IPI payload trend</span> — JSON-LD abuse fastest-growing vector (illustrative)",
     "<b>Pay Per Crawl</b> settle volume " + fmtMoney(kpi.rev) + " today",
     "<b>WebMCP</b> tools discovered: " + fmtInt(mcpAll) + " this session",
     "APAC leads ingest share at 40.1% · NA 39.4% · EMEA 17.2%",
@@ -1622,7 +1622,7 @@ async function driveVerify(ev) {
       } else if (verdict === "invalid") {
         verifyState.textContent = "SIGNATURE INVALID ✗";
         verifyState.className = "badge bad";
-        $("#verify-log").textContent = `[${nowStamp()}] ✗ ${escHtml(reason)} → rejected at the edge`;
+        $("#verify-log").textContent = `[${nowStamp()}] ✗ ${escHtml(reason)} → classified: INVALID`;
       } else if (verdict === "unresolved") {
         verifyState.textContent = "KEY NOT FOUND ?";
         verifyState.className = "badge warn";
@@ -1634,25 +1634,25 @@ async function driveVerify(ev) {
         $("#verify-log").textContent = `[${nowStamp()}] ${ok ? "✓ structure + freshness validated locally; no cryptographic verdict on this event" : "✗ tag/freshness check failed → rejected"}`;
       }
     } else if (ev.kind === "shadow") {
-      verifyState.textContent = "REJECTED → BIOMETRICS";
+      verifyState.textContent = "SHADOW · UNSIGNED";
       verifyState.className = "badge bad";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] ✗ unsigned + "${escHtml(ev.shadow ? ev.shadow.signal : "automation signal")}" (${ev.shadow ? ev.shadow.conf : 0}% conf) → behavioral-biometrics track`;
+      $("#verify-log").textContent = `[${nowStamp()}] ✗ unsigned + "${escHtml(ev.shadow ? ev.shadow.signal : "automation signal")}" (${ev.shadow ? ev.shadow.conf : 0}% conf) → classified as shadow: unsigned + headless UA`;
     } else if (ev.kind === "known") {
       verifyState.textContent = `KNOWN · ${ev.agent.name}`;
       verifyState.className = "badge warn";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] ${escHtml(ev.agent.op)}/${escHtml(ev.agent.name)} matched by User-Agent only — no Web Bot Auth signature; identity-registry (unsigned) track`;
+      $("#verify-log").textContent = `[${nowStamp()}] ${escHtml(ev.agent.op)}/${escHtml(ev.agent.name)} matched by published agent User-Agent — classified as known (unsigned; no signature to verify)`;
     } else if (ev.kind === "tool") {
       verifyState.textContent = "NON-BROWSER CLIENT";
       verifyState.className = "badge info";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] scripted client observed · ${escHtml(ev.ua).slice(0, 70)} → tool-traffic track`;
+      $("#verify-log").textContent = `[${nowStamp()}] scripted client observed · ${escHtml(ev.ua).slice(0, 70)} → classified as tool`;
     } else {
       verifyState.textContent = "BROWSER TRAFFIC";
       verifyState.className = "badge ok";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] browser-shaped request, unsigned → allow (human track) · ${escHtml(ev.path)}`;
+      $("#verify-log").textContent = `[${nowStamp()}] browser-shaped request, unsigned → classified as human · ${escHtml(ev.path)}`;
     }
     await new Promise((r) => setTimeout(r, 700));
     hops.forEach((h) => h.classList.remove("active"));

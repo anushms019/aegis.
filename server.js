@@ -1260,7 +1260,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (pathname === "/api/snapshot") {
-    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    // no CORS header: the dashboard is same-origin; a wildcard would let
+    // any website read loopback data from scripts
+    res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(snapshot()));
     finish(200);
     return;
@@ -1279,10 +1281,10 @@ const server = http.createServer((req, res) => {
 
   if (pathname === "/events") {
     res.writeHead(200, {
+      // same-origin only — see /api/snapshot above
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       connection: "keep-alive",
-      "access-control-allow-origin": "*",
     });
     res.write("retry: 2000\n");
     res.write("data: " + JSON.stringify(snapshot()) + "\n\n"); // hydrate on connect

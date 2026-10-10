@@ -54,7 +54,7 @@ async function runVerification() {
 <span class="k">signature-input:</span> <span class="badv">(absent)</span>
 <span class="k">signature-agent:</span> <span class="badv">(absent)</span>
 <span class="k">x-forwarded-for:</span> <span class="warnv">rotating · 14 hops · datacenter ASN</span>
-<span class="k">verdict:</span> <span class="badv">→ behavioral scoring path</span>`
+<span class="k">verdict:</span> <span class="badv">→ classified as shadow (unsigned)</span>`
     : `<span class="k">GET</span> ${path}
 <span class="k">signature-input:</span> <span class="v">(:method/:authority/:path);created=${created};expires=${expires};tag="web-bot-auth"</span>
 <span class="k">signature:</span> <span class="v">:${sig.slice(0, 48)}…</span>
@@ -72,7 +72,7 @@ async function runVerification() {
         `fetching JWKS (kid=${ag.kid})`,
         "checking freshness window (±120 s)",
         "Ed25519 signature verification over signature base",
-        "consulting agent identity registry → trust decision",
+        "comparing keyid against the local keyring → verdict",
       ][i]}`;
     await new Promise((r) => setTimeout(r, rndi(140, 320)));
   }
@@ -83,7 +83,7 @@ async function runVerification() {
     verifyState.textContent = "REJECTED";
     verifyState.className = "badge bad";
     $("#verify-log").textContent =
-      `[${nowStamp()}] ✗ no valid signature → escalated to behavioral biometrics pipeline (shadow-agent track)`;
+      `[${nowStamp()}] ✗ no valid signature → classified as shadow: unsigned + headless UA`;
   } else {
     jwksOk++;
     verifyState.textContent = "VERIFIED";

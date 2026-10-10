@@ -213,7 +213,7 @@ async function driveVerify(ev) {
       } else if (verdict === "invalid") {
         verifyState.textContent = "SIGNATURE INVALID ✗";
         verifyState.className = "badge bad";
-        $("#verify-log").textContent = `[${nowStamp()}] ✗ ${escHtml(reason)} → rejected at the edge`;
+        $("#verify-log").textContent = `[${nowStamp()}] ✗ ${escHtml(reason)} → classified: INVALID`;
       } else if (verdict === "unresolved") {
         verifyState.textContent = "KEY NOT FOUND ?";
         verifyState.className = "badge warn";
@@ -225,25 +225,25 @@ async function driveVerify(ev) {
         $("#verify-log").textContent = `[${nowStamp()}] ${ok ? "✓ structure + freshness validated locally; no cryptographic verdict on this event" : "✗ tag/freshness check failed → rejected"}`;
       }
     } else if (ev.kind === "shadow") {
-      verifyState.textContent = "REJECTED → BIOMETRICS";
+      verifyState.textContent = "SHADOW · UNSIGNED";
       verifyState.className = "badge bad";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] ✗ unsigned + "${escHtml(ev.shadow ? ev.shadow.signal : "automation signal")}" (${ev.shadow ? ev.shadow.conf : 0}% conf) → behavioral-biometrics track`;
+      $("#verify-log").textContent = `[${nowStamp()}] ✗ unsigned + "${escHtml(ev.shadow ? ev.shadow.signal : "automation signal")}" (${ev.shadow ? ev.shadow.conf : 0}% conf) → classified as shadow: unsigned + headless UA`;
     } else if (ev.kind === "known") {
       verifyState.textContent = `KNOWN · ${ev.agent.name}`;
       verifyState.className = "badge warn";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] ${escHtml(ev.agent.op)}/${escHtml(ev.agent.name)} matched by User-Agent only — no Web Bot Auth signature; identity-registry (unsigned) track`;
+      $("#verify-log").textContent = `[${nowStamp()}] ${escHtml(ev.agent.op)}/${escHtml(ev.agent.name)} matched by published agent User-Agent — classified as known (unsigned; no signature to verify)`;
     } else if (ev.kind === "tool") {
       verifyState.textContent = "NON-BROWSER CLIENT";
       verifyState.className = "badge info";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] scripted client observed · ${escHtml(ev.ua).slice(0, 70)} → tool-traffic track`;
+      $("#verify-log").textContent = `[${nowStamp()}] scripted client observed · ${escHtml(ev.ua).slice(0, 70)} → classified as tool`;
     } else {
       verifyState.textContent = "BROWSER TRAFFIC";
       verifyState.className = "badge ok";
       hops[0].classList.add("active");
-      $("#verify-log").textContent = `[${nowStamp()}] browser-shaped request, unsigned → allow (human track) · ${escHtml(ev.path)}`;
+      $("#verify-log").textContent = `[${nowStamp()}] browser-shaped request, unsigned → classified as human · ${escHtml(ev.path)}`;
     }
     await new Promise((r) => setTimeout(r, 700));
     hops.forEach((h) => h.classList.remove("active"));

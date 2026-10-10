@@ -391,3 +391,22 @@ test("server and build source are never downloadable (source-leak guard)", async
   assert.match(app.headers.get("content-type") || "", /javascript/);
   assert.equal((await fetch(base + "/")).status, 200, "dashboard must still be served");
 });
+
+test("no CORS wildcard: dashboard endpoints never advertise cross-origin access", async () => {
+  // a loopback capture server must not be readable from scripts on other
+  // origins — the dashboard is same-origin and needs no CORS header
+  for (const p of ["/", "/api/snapshot", "/api/health", "/metrics"]) {
+    const res = await fetch(base + p);
+    assert.equal(res.headers.get("access-control-allow-origin"), null,
+      `${p} must not send access-control-allow-origin`);
+  }
+  const ctrl = new AbortController();
+  try {
+    const ev = await fetch(base + "/events", { signal: ctrl.signal });
+    assert.equal(ev.headers.get("access-control-allow-origin"), null,
+      "/events must not send access-control-allow-origin");
+    await ev.body.cancel();
+  } finally {
+    ctrl.abort();
+  }
+});

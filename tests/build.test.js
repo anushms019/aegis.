@@ -312,6 +312,12 @@ test("dashboard ships no fabricated-infrastructure or unimplemented-capability c
     /edge PoP/i, /Kafka/, /Flink/, /ClickHouse/,
     /310\s?ms/, /42 edge/i, /9[- ]region/i,
     /TrajAD/, /Rule of Two/, /Canvas hash persistence/i,
+    // invented verification pipelines and tracks
+    /behavioral[- ]biometrics? (?:track|pipeline)/i, /BIOMETRICS/,
+    /identity[- ]registry/i, /behavioral scoring/, /rejected at the edge/,
+    /tool-traffic track/, /human track/,
+    // invented trend stats
+    /▲32%/,
   ];
   for (const re of banned) {
     assert.ok(!re.test(html), `index.html still matches unverifiable claim ${re}`);
