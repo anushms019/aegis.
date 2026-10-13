@@ -20,6 +20,7 @@
 "use strict";
 const http = require("http");
 const https = require("https");
+const net = require("net");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("node:crypto");
@@ -1127,6 +1128,144 @@ function emit(ev) {
   otlpEnqueue(ev); // no-op unless OTLP_ENDPOINT is configured
 }
 
+/* ── client address / X-Forwarded-For policy ─────────────────────
+   Default is OFF: the client address is whatever the socket says, so a
+   request that reaches us directly cannot spoof its own IP by sending a
+   header. TRUST_PROXY enables the header — and only for traffic from a
+   proxy you listed:
+
+     TRUST_PROXY=off|0|false|no   (default) ignore X-Forwarded-For
+     TRUST_PROXY=on|1|true        trust loopback + RFC1918 + ULA peers
+     TRUST_PROXY=10.0.0.0/8,…     trust exactly these IPs / CIDRs
+
+   With TRUST_PROXY on, the client is the RIGHT-MOST hop in the chain that
+   is not a trusted proxy (the socket peer is always the last hop). Anything
+   unparseable is never a proxy, so it stops the walk. Unparseable entries
+   in the list itself are dropped — an empty result means the header stays
+   ignored. */
+
+/* Literal → bytes (4 for IPv4, 16 for IPv6), or null when it is not one.
+   Zone ids and brackets are stripped; IPv4-mapped IPv6 collapses to IPv4 so
+   "::ffff:10.0.0.1" and "10.0.0.1" compare equal. */
+function ipBytes(raw) {
+  let s = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!s) return null;
+  const pct = s.indexOf("%");
+  if (pct >= 0) s = s.slice(0, pct);
+  if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
+  if (net.isIPv4(s)) return s.split(".").map((o) => Number(o));
+  if (!net.isIPv6(s)) return null;
+  const dc = s.indexOf("::");
+  const split = (p) => (p === "" ? [] : p.split(":"));
+  const headG = split(dc >= 0 ? s.slice(0, dc) : s);
+  const tailG = split(dc >= 0 ? s.slice(dc + 2) : "");
+  const words = (groups) => {
+    const out = [];
+    for (const g of groups) {
+      if (g.includes(".")) {
+        if (!net.isIPv4(g)) return null;
+        const v4 = g.split(".").map(Number);
+        out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+        continue;
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+      out.push(parseInt(g, 16));
+    }
+    return out;
+  };
+  let hg = words(headG), tg = words(tailG);
+  if (!hg || !tg) return null;
+  if (dc >= 0) {
+    const fill = 8 - hg.length - tg.length;
+    if (fill < 1) return null;
+    hg = hg.concat(new Array(fill).fill(0));
+  }
+  const all = hg.concat(tg);
+  if (all.length !== 8) return null;
+  const b = [];
+  for (const w of all) b.push((w >> 8) & 255, w & 255);
+  // ::ffff:a.b.c.d → a.b.c.d
+  if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) return b.slice(12);
+  return b;
+}
+
+function normalizeIp(raw) {
+  const b = ipBytes(raw);
+  if (!b) return String(raw == null ? "" : raw).trim().slice(0, 64);
+  if (b.length === 4) return b.join(".");
+  const groups = [];
+  for (let i = 0; i < 16; i += 2) groups.push(((b[i] << 8) | b[i + 1]).toString(16));
+  return groups.join(":");
+}
+
+function inCidr(rule, bytes) {
+  if (!rule || !bytes || rule.base.length !== bytes.length) return false;
+  const full = rule.bits >> 3, rem = rule.bits & 7;
+  for (let i = 0; i < full; i++) if (rule.base[i] !== bytes[i]) return false;
+  if (rem) {
+    const mask = (0xff << (8 - rem)) & 0xff;
+    if ((rule.base[full] & mask) !== (bytes[full] & mask)) return false;
+  }
+  return true;
+}
+
+function parseTrustEntry(entry) {
+  const slash = entry.indexOf("/");
+  const ip = slash === -1 ? entry : entry.slice(0, slash);
+  const base = ipBytes(ip);
+  if (!base) return null;                       // malformed → dropped
+  const size = base.length * 8;
+  if (slash === -1) return { base, bits: size };
+  const bits = Number(entry.slice(slash + 1));
+  if (!Number.isInteger(bits) || bits < 0 || bits > size) return null;
+  return { base, bits };
+}
+
+const TRUST_PROXY_DEFAULT_CIDRS = [
+  "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+  "fc00::/7", "fe80::/10", "::1/128",
+];
+
+let trustRaw, trustCache;
+function trustProxyRules() {
+  const raw = process.env.TRUST_PROXY || "";
+  if (raw !== trustRaw) {
+    trustRaw = raw;
+    const s = raw.trim().toLowerCase();
+    let entries = [];
+    if (s && !["0", "off", "false", "no"].includes(s)) {
+      entries = ["1", "on", "true", "yes"].includes(s)
+        ? TRUST_PROXY_DEFAULT_CIDRS
+        : s.split(",").map((e) => e.trim()).filter(Boolean);
+    }
+    trustCache = entries.map(parseTrustEntry).filter(Boolean);
+  }
+  return trustCache;
+}
+
+function clientIp(req) {
+  const socketRaw = (req.socket && req.socket.remoteAddress) || "";
+  const rules = trustProxyRules();
+  if (!rules.length) return normalizeIp(socketRaw); // header ignored (default)
+  const fwd = req.headers && req.headers["x-forwarded-for"];
+  const chain = [];
+  if (typeof fwd === "string" && fwd.length < 4096) {
+    for (const part of fwd.split(",")) {
+      const p = part.trim();
+      if (p) chain.push(p.slice(0, 64));
+    }
+  }
+  // right → left: trusted proxies are skipped, first non-trusted hop wins
+  const hops = chain.concat([socketRaw]);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    const hop = hops[i];
+    const bytes = ipBytes(hop);
+    if (!bytes) return String(hop).slice(0, 64);  // not parseable → not a proxy
+    if (!rules.some((r) => inCidr(r, bytes))) return normalizeIp(hop);
+  }
+  return normalizeIp(hops[0]); // every hop trusted → leftmost claimed client
+}
+
 function makeEvent(req, status, ms) {
   const cls = classify(req);
   const signed = cls.signed.present
@@ -1140,7 +1279,7 @@ function makeEvent(req, status, ms) {
     path: url ? url.pathname : String(req.url || "/").slice(0, 80),
     status,
     ms,
-    ip: (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim().replace("::ffff:", ""),
+    ip: clientIp(req),
     ua: (req.headers["user-agent"] || "").slice(0, 220),
     lang: req.headers["accept-language"] || null,
     ref: req.headers.referer || req.headers.referrer || null,
@@ -1613,4 +1752,5 @@ module.exports = { classify, parseLogLine,
   queueJwksFetch, jwksBackoffDelay, recordJwksFailure, recordJwksSuccess,
   jwksPins, checkJwksPin, startJwksRefresher, stopJwksRefresher,
   remoteJwksCache, remoteJwksBackoff, httpsGetJwks, jwksQueued,
+  clientIp, trustProxyRules, requestUrl, decodeForScan,
 };
