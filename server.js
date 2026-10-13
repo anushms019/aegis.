@@ -31,6 +31,45 @@ const HOST = process.env.HOST || "127.0.0.1";
 const ROOT = __dirname;
 const LOG_PATH = process.env.LOG_PATH || null;
 
+/* ── request-target parsing (never throws) ────────────────────
+   Node's HTTP parser hands us targets the WHATWG URL parser rejects
+   (absolute-form "http://", "///", backslash targets), and `new URL`
+   throws a TypeError on them. An exception escaping the request listener
+   ends the process, so every parse goes through this helper: it returns
+   null instead, and the caller answers 400. */
+function requestUrl(raw) {
+  try {
+    return new URL(typeof raw === "string" && raw ? raw : "/", "http://local");
+  } catch (_) {
+    return null;
+  }
+}
+
+/* Lenient percent-decoding for signal scanning: valid escape runs are
+   decoded (so an encoded payload is still matched), malformed ones ("%",
+   "%ZZ", a truncated UTF-8 sequence) are left exactly as they came in.
+   Never throws — a bad escape in a request path must not take the process
+   down, which is precisely what an inline decodeURIComponent() did. */
+function decodeForScan(s) {
+  return String(s).replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try { return decodeURIComponent(run); } catch (_) { return run; }
+  });
+}
+
+/* Fatal-error policy. Outside the test runner a fatal error is logged and
+   the process exits non-zero: a capture server that can no longer capture
+   must not keep serving as if healthy. Under `node --test` nothing is
+   installed — the runner owns fatal errors and Node's default behaviour
+   (print + exit non-zero) still applies, so nothing is ever swallowed. */
+if (!process.env.NODE_TEST_CONTEXT) {
+  const fatal = (kind) => (err) => {
+    console.error(`[fatal] ${kind}:`, (err && (err.stack || err)) || err);
+    process.exit(1);
+  };
+  process.on("uncaughtException", fatal("uncaughtException"));
+  process.on("unhandledRejection", fatal("unhandledRejection"));
+}
+
 /* ── real agent User-Agent registry ─────────────────────── */
 const UA_RULES = [
   [/GPTBot/i, "GPTBot", "OpenAI"],
@@ -1060,12 +1099,12 @@ function makeEvent(req, status, ms) {
   const signed = cls.signed.present
     ? { ...cls.signed, ...verifySignedRequest(req), present: true }
     : cls.signed;
-  const url = new URL(req.url, "http://local");
+  const url = requestUrl(req.url); // null → unparseable target, see below
   const ev = {
     t: Date.now(),
     source: "http",
     method: req.method,
-    path: url.pathname,
+    path: url ? url.pathname : String(req.url || "/").slice(0, 80),
     status,
     ms,
     ip: (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim().replace("::ffff:", ""),
@@ -1078,7 +1117,9 @@ function makeEvent(req, status, ms) {
     shadow: cls.shadow,
     headers: cls.headers,
   };
-  ev.signals = deriveSignals(ev, url);
+  // No URL means we could not parse the request target at all: record the
+  // request honestly (raw target, capped) and derive nothing from it.
+  ev.signals = url ? deriveSignals(ev, url) : null;
   return ev;
 }
 
@@ -1103,8 +1144,10 @@ const SCOPE_PATH_RE = /^\/(?:api|docs|products|pricing|blog|robots\.txt|\.well-k
 
 function deriveSignals(ev, url) {
   const s = { ipi: null, traj: null, toolCall: false, revenue: 0 };
-  const probe = decodeURIComponent(
-    ((ev.path || "") + "?" + (url.search || "")).replace(/\+/g, " ")
+  // decodeForScan, not decodeURIComponent: a malformed escape here used to
+  // throw URIError out of the request listener and kill the process.
+  const probe = decodeForScan(
+    ((ev.path || "") + "?" + (url && url.search ? url.search : "")).replace(/\+/g, " ")
   ).slice(0, 1400);
 
   // IPI: injection-shaped payload anywhere in path or query
@@ -1222,16 +1265,12 @@ function checkAuth(req, pathname) {
 }
 
 /* ── HTTP server ────────────────────────────────────────── */
-const server = http.createServer((req, res) => {
-  const started = process.hrtime.bigint();
-  const url = new URL(req.url, "http://local");
-  const pathname = url.pathname;
 
-  const finish = (status) => {
-    const ms = Number(process.hrtime.bigint() - started) / 1e6;
-    if (!TELEMETRY_PATHS.has(pathname)) emit(makeEvent(req, status, ms));
-  };
-
+/* Routing body for one request. Only the guarded entry point below calls
+   it, so anything thrown in here is turned into a 400/500 response instead
+   of reaching the process. `pathname` is the parsed path, `finish` records
+   the event (at most once — see the entry point). */
+function routeRequest(req, res, pathname, finish) {
   if (pathname === "/api/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, clients: clients.size, total: counters.total }));
@@ -1310,6 +1349,61 @@ const server = http.createServer((req, res) => {
     res.end(data);
     finish(200);
   });
+}
+
+/* Guarded entry point. `finish` is idempotent and the catch block calls it
+   too, so a failure can never count an event twice (or zero times). The
+   provisional path is only consulted before routing; it deliberately can
+   never equal a telemetry path, so a refused request is always counted. */
+const server = http.createServer((req, res) => {
+  const started = process.hrtime.bigint();
+  let counted = false;
+  let pathname = String(req.url || "/").split("?")[0].slice(0, 200);
+
+  const finish = (status) => {
+    if (counted) return;
+    counted = true;
+    if (TELEMETRY_PATHS.has(pathname)) return;
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    try {
+      emit(makeEvent(req, status, ms));
+    } catch (err) {
+      // Losing an event is a logged fault — never a dead connection and
+      // never a dead process.
+      console.error("[http] event not recorded:", (err && err.stack) || err);
+    }
+  };
+
+  const refuse = (status, msg) => {
+    if (res.headersSent || res.writableEnded) {
+      try { res.end(); } catch (_) {}
+      return;
+    }
+    res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+    res.end(msg);
+  };
+
+  try {
+    const url = requestUrl(req.url);
+    if (!url) throw new TypeError(`invalid request target: ${String(req.url).slice(0, 80)}`);
+    pathname = url.pathname;
+    routeRequest(req, res, pathname, finish);
+  } catch (err) {
+    /* Safety net — nothing may escape the request listener. A target we
+       cannot parse ("GET http:// HTTP/1.1") or a URIError is the client's
+       fault → 400; anything else is ours → 500. Either way the client gets
+       a response, the event is counted exactly once, and the process keeps
+       serving subsequent requests. */
+    const bad = err instanceof URIError ||
+      (err instanceof TypeError && /invalid request target/i.test(String(err.message)));
+    const status = bad ? 400 : 500;
+    console.error(
+      `[http] ${req.method} ${String(req.url || "").slice(0, 120)} -> ${status}:`,
+      (err && err.stack) || err
+    );
+    finish(status);
+    refuse(status, bad ? "bad request\n" : "internal error\n");
+  }
 });
 
 const TELEMETRY_PATHS = new Set(["/events", "/api/snapshot", "/api/health", "/metrics"]);

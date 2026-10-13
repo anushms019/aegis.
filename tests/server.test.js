@@ -7,6 +7,8 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 const { classify, parseLogLine } = require("../server.js");
 
 const req = (ua, headers = {}) => ({
@@ -133,4 +135,46 @@ test("malformed lines are ignored, not thrown", () => {
   assert.equal(parseLogLine("{broken json"), null);
   assert.equal(parseLogLine(""), null);
   assert.equal(parseLogLine("   "), null);
+});
+
+/* ── fatal-error policy (audit finding C4 / task P1-1) ─────────
+   Outside the test runner a fatal error must be logged and the process
+   must exit non-zero: a capture server that can no longer capture may not
+   keep serving. Under `node --test` the server installs no handlers at all
+   (the runner owns fatal errors), asserted below by the absence of the
+   marker — nothing is ever swallowed silently in either mode. Each case
+   runs in its own child process so neither outcome can take this suite
+   down. */
+const serverPath = path.join(__dirname, "..", "server.js");
+
+function runFatal(trigger, { underTestRunner = false } = {}) {
+  const env = { ...process.env };
+  if (underTestRunner) env.NODE_TEST_CONTEXT = "child-v8";
+  else delete env.NODE_TEST_CONTEXT; // a normal production run
+  return spawnSync(
+    process.execPath,
+    ["-e", `require(${JSON.stringify(serverPath)}); ${trigger}`],
+    { env, encoding: "utf8", timeout: 15000 }
+  );
+}
+
+test("uncaughtException outside tests is logged and exits non-zero", () => {
+  const child = runFatal("setTimeout(() => { throw new Error('boom'); }, 20);");
+  assert.notEqual(child.status, 0, `expected a non-zero exit, got ${child.status}\n${child.stderr}`);
+  assert.match(child.stderr, /\[fatal\] uncaughtException/);
+  assert.match(child.stderr, /boom/);
+});
+
+test("unhandledRejection outside tests is logged and exits non-zero", () => {
+  const child = runFatal("Promise.reject(new Error('nope'));");
+  assert.notEqual(child.status, 0, `expected a non-zero exit, got ${child.status}\n${child.stderr}`);
+  assert.match(child.stderr, /\[fatal\] unhandledRejection/);
+  assert.match(child.stderr, /nope/);
+});
+
+test("no server fatal handlers are installed under the test runner", () => {
+  const child = runFatal("setTimeout(() => { throw new Error('boom'); }, 20);", { underTestRunner: true });
+  assert.notEqual(child.status, 0, "Node's default (crash, non-zero) must still apply");
+  assert.ok(!/\[fatal\]/.test(child.stderr),
+    "server.js must leave fatal errors to the test runner");
 });

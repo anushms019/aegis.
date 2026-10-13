@@ -28,6 +28,11 @@ const cases = [
   ["GET /api?path=% HTTP/1.1", "scope path with bare %"],
   ["G\x00T / HTTP/1.1", "NUL byte in method"],
   ["GET /?q=%25% HTTP/1.1", "%25 then bare %"],
+  // absolute-form / malformed request targets: Node's parser accepts them,
+  // WHATWG URL does not — the handler's `new URL(req.url)` used to throw
+  ["GET http:// HTTP/1.1", "absolute-form unparseable target"],
+  ["GET /// HTTP/1.1", "protocol-relative target"],
+  ["GET http://[ HTTP/1.1", "broken authority target"],
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

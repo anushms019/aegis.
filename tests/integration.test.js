@@ -5,6 +5,7 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const net = require("node:net");
 const { server, snapshot, resetCounters, addVerificationKey } = require("../server.js");
 
 let base;
@@ -409,4 +410,90 @@ test("no CORS wildcard: dashboard endpoints never advertise cross-origin access"
   } finally {
     ctrl.abort();
   }
+});
+
+/* ── crash resistance (audit findings C1–C4) ─────────────────────
+   Phase 0 sent a malformed-input battery to a live server: 7 of 14
+   inputs killed the process — an uncaught URIError from
+   decodeURIComponent() in deriveSignals, and a TypeError from
+   new URL(req.url) on absolute-form targets like "GET http:// HTTP/1.1".
+   Everything below must now get an HTTP answer, leave the process
+   serving, and be counted exactly once. */
+
+/* Raw request: `fetch()` normalizes the target before the wire, so the
+   malformed cases have to be written by hand over a socket. */
+function rawRequest(target, headers = "") {
+  return new Promise((resolve) => {
+    let out = "";
+    const sock = net.connect(server.address().port, "127.0.0.1", () => {
+      sock.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n${headers}\r\n`);
+    });
+    sock.setTimeout(2500);
+    sock.on("data", (d) => { out += d.toString("latin1"); });
+    sock.on("timeout", () => sock.destroy());
+    sock.on("error", () => {}); // ECONNRESET is a recorded outcome, not a throw
+    sock.on("close", () => resolve(out));
+  });
+}
+
+const MALFORMED_TARGETS = [
+  ["/%", "bare percent escape"],
+  ["/%E0%A4%A", "truncated UTF-8 escape"],
+  ["/?q=%", "bare percent in query"],
+  ["/" + "a".repeat(10240), "10 KB path"],
+  ["/%2e%2e/%2e%2e/etc/passwd", "encoded traversal"],
+  ["/?q=<script>alert(1)</script>", "xss query"],
+  ["/?q=%ZZ", "invalid escape"],
+  ["/?q=%E0%A4", "truncated multibyte escape"],
+  ["/api?path=%", "scope path with bare percent"],
+  ["http://", "absolute-form unparseable target"],
+  ["///", "protocol-relative target"],
+  ["http://[", "broken authority target"],
+];
+
+const MALFORMED_HEADERS = [
+  ["X-Bad: \xff\xfe\xfd\r\n", "invalid UTF-8 header value"],
+  ["Signature: sig1=:!!!not-base64!!!:\r\nSignature-Input: sig1=(:method)\r\n", "malformed signature headers"],
+  ["Authorization: Basic !!!\r\n", "malformed Basic credentials"],
+];
+
+test("malformed request battery: every input is answered and the server keeps serving", async () => {
+  for (const [target, why] of MALFORMED_TARGETS) {
+    const out = await rawRequest(target);
+    assert.ok(out === "" || /^HTTP\/1\.[01] \d{3}/.test(out),
+      `${why}: no parseable reply: ${JSON.stringify(out.slice(0, 80))}`);
+    assert.equal((await fetch(base + "/api/health")).status, 200,
+      `server stopped serving after ${why}`);
+  }
+  for (const [headers, why] of MALFORMED_HEADERS) {
+    const out = await rawRequest("/", headers);
+    assert.ok(out === "" || /^HTTP\/1\.[01] \d{3}/.test(out),
+      `${why}: no parseable reply: ${JSON.stringify(out.slice(0, 80))}`);
+    assert.equal((await fetch(base + "/api/health")).status, 200,
+      `server stopped serving after ${why}`);
+  }
+  // ordinary traffic still works end to end afterwards
+  assert.equal((await fetch(base + "/index.html")).status, 200);
+  assert.equal((await fetch(base + "/metrics")).status, 200);
+});
+
+test("a malformed request is answered and counted exactly once", async () => {
+  const before = snapshot().total;
+
+  // unparseable target → the safety net answers 400 …
+  assert.match(await rawRequest("http://"), /^HTTP\/1\.[01] 400\b/,
+    "unparseable request target must be refused with 400");
+  // … and records one event, not two and not none
+  assert.equal(snapshot().total, before + 1,
+    "an unparseable target must be counted exactly once");
+
+  // the URIError case that used to kill the process
+  assert.match(await rawRequest("/%"), /^HTTP\/1\.[01] 404\b/);
+  assert.equal(snapshot().total, before + 2,
+    "the percent-escape request must be counted exactly once");
+
+  // telemetry paths stay exempt from counting, malformed or not
+  const t0 = snapshot().total;
+  assert.match(await rawRequest("/api/health"), /^HTTP\/1\.[01] 200\b/);
+  assert.equal(snapshot().total, t0, "telemetry paths must never be counted");
 });
