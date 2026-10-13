@@ -68,11 +68,11 @@ async function runVerification() {
     $("#verify-log").textContent =
       `[${nowStamp()}] hop ${i + 1}/6 · ${[
         "parsing Signature-Input / Signature / Signature-Agent",
-        "resolving Signature-Agent URI",
-        `fetching JWKS (kid=${ag.kid})`,
+        `local keyring lookup (kid=${ag.kid})`,
+        "component coverage: @method / @authority / @path",
         "checking freshness window (±120 s)",
-        "Ed25519 signature verification over signature base",
-        "comparing keyid against the local keyring → verdict",
+        "verifying signature over the rebuilt signature base",
+        "key material + coverage + freshness → verdict",
       ][i]}`;
     await new Promise((r) => setTimeout(r, rndi(140, 320)));
   }

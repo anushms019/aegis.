@@ -302,6 +302,48 @@ test("live-vs-sim integrity: honest clock, no baseline mixing, no fabricated tre
   assert.ok(app.includes("seenEvents"), "event dedupe guard missing from the live feed");
 });
 
+test("every dashboard section declares its data source (SIM or LIVE)", () => {
+  // A reader must be able to tell, per section, whether the numbers are
+  // simulated or captured — a section with no marker is an honesty gap.
+  const html = read("index.html");
+  const heads = [...html.matchAll(/<div class="section-head">[\s\S]*?<\/div>/g)].map((m) => m[0]);
+  assert.ok(heads.length >= 9,
+    `expected the nine numbered sections, found ${heads.length}`);
+  for (const head of heads) {
+    const idx = (head.match(/class="idx">([^<]+)/) || [])[1] || "?";
+    assert.ok(/\bSIM\b|\bLIVE\b/.test(head),
+      `section ${idx} has no SIM/LIVE source marker:\n${head}`);
+  }
+});
+
+test("forbidden phrases stay gone: invented metrics, fetches and detectors", () => {
+  const html = read("index.html");
+  const app = read("app.js");
+  /* Each of these claims something this codebase does not do or did not
+     measure. The technique NAMES inside the section-03 research matrix are
+     intentionally still there — that table is framed as research notes, not
+     capabilities (asserted by the marker test above), so the bans target the
+     phrases that present a claim as ours. */
+  const banned = [
+    /Gross Margin/,                    // no margin is computed anywhere
+    /Fetch Signature-Agent/,           // the header is read, never fetched
+    /Resolve JWKS/,                    // keys come from the local keyring
+    /Ed25519 verify/,                  // verification is alg-driven, not Ed25519-only
+    /resolving Signature-Agent/,       // implies a network lookup
+    /fetching JWKS/,                   // implies a network lookup
+    /JA4\+ TLS fingerprint drift/,     // detector never implemented
+    /CDP attach timing residual/,      // detector never implemented
+    /Fitts-law dwell mismatch/,        // detector never implemented
+    /isTrusted dispatch cadence/,      // detector never implemented
+    /hard halt \+ rollback queue/,     // the server halts nothing
+    /ORBITAL/,                         // brand inconsistency
+  ];
+  for (const re of banned) {
+    assert.ok(!re.test(html), `index.html matches forbidden phrase ${re}`);
+    assert.ok(!re.test(app), `app.js matches forbidden phrase ${re}`);
+  }
+});
+
 test("dashboard ships no fabricated-infrastructure or unimplemented-capability claims", () => {
   const html = read("index.html");
   const app = read("app.js");

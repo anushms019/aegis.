@@ -187,7 +187,7 @@ async function driveVerify(ev) {
       const steps = verdict
         ? [
             `parsing Signature-Input (${si.length} bytes), ${(si.match(/"/g) || []).length / 2 | 0} covered components`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             `local keyring lookup → kid=${kid}${verdict === "unresolved" ? " — NOT FOUND" : " ✓"}`,
             `coverage + freshness → ${/coverage|expired|future|missing/i.test(reason) ? "POLICY FAIL" : "within policy ✓"}`,
             `${alg} verify … ${verdict === "valid" ? "OK ✓" : verdict === "invalid" ? "FAILED ✗" : "SKIPPED — key material unavailable"}`,
@@ -195,7 +195,7 @@ async function driveVerify(ev) {
           ]
         : [
             `parsing Signature-Input (${si.length} bytes), components: ${/[:@][a-z]/i.test(si) ? "method/authority/path" : "custom"}`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             "local keyring lookup … no verdict attached to this event",
             `Content-Digest: ${ev.headers && ev.headers["content-digest"] ? "present ✓" : "absent — not covered"}`,
             "cryptographic verify … UNAVAILABLE (event predates the verifier)",

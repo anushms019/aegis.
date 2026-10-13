@@ -43,7 +43,6 @@ function renderPpc() {
   $("#ppc-200").textContent = fmtInt(ppc200);
   $("#ppc-402").textContent = fmtInt(ppc402);
   $("#ppc-bid").textContent = "$0.0057 avg";
-  $("#ppc-margin").textContent = "72.4%";
 }
 renderPpc(); drawRevenue();
 setInterval(() => {

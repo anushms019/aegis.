@@ -1,14 +1,17 @@
 /* ─────────────── Shadow-agent detection feed ───────────── */
 const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit fork", "Playwright vanilla", "Puppeteer-stealth"];
+/* SIM rows reuse the signal vocabulary the server actually emits
+   (AUTOMATION_RULES / browser-claim heuristic / missing-UA in server.js).
+   Simulated rows must never name a detector this project does not build:
+   no TLS-fingerprint analysis, no debugger-timing analysis, no pointer
+   dynamics — those live only in the framed research matrix in section 03. */
 const SIGNALS = [
-  ["isTrusted dispatch cadence", 97],
-  ["JA4+ TLS fingerprint drift", 91],
-  ["canvas fingerprint reuse", 99],
-  ["Bézier jitter regularity", 88],
-  ["CDP attach timing residual", 94],
-  ["Fitts-law dwell mismatch", 86],
-  ["Font metric degeneration gap", 90],
-  ["navigator.webdriver equivocation", 78],
+  ["Headless Chrome (patched-engine track)", 96],
+  ["automation framework", 92],
+  ["headless client", 90],
+  ["PhantomJS", 94],
+  ["Mozilla UA without sec-ch-ua / accept-language / sec-fetch-*", 82],
+  ["missing User-Agent header", 71],
 ];
 function fpHash() {
   return [8, 4, 4, 4, 12].map((n) => hex(n)).join("-");

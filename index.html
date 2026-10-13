@@ -494,7 +494,7 @@ footer {
   <div class="brand">
     <div class="brand-mark"></div>
     <div>
-      <div class="brand-name">AEGIS // ORBITAL</div>
+      <div class="brand-name">AEGIS</div>
       <div class="brand-sub">Global AI Agent Observability Console</div>
     </div>
   </div>
@@ -670,28 +670,29 @@ footer {
 <div class="section-head">
   <span class="idx">02</span>
   <h2>Mechanisms of Entry · Web Bot Auth</h2>
-  <span class="note">RFC 9421 HTTP Message Signatures — tag="web-bot-auth"</span>
+  <span class="note">RFC 9421 HTTP Message Signatures — tag="web-bot-auth" · SIM / LIVE</span>
 </div>
 
 <div class="grid g-12">
   <div class="panel">
     <div class="panel-head">
       <h3>Deterministic Verification Loop</h3>
+      <span class="tag">SIM · LIVE on capture</span>
       <div class="right"><span class="badge ok" id="verify-state">IDLE</span></div>
     </div>
     <div class="panel-body">
       <div class="verify-loop" id="verify-loop">
         <span class="hop" data-hop="0">1 · Parse headers</span><span class="arrow">→</span>
-        <span class="hop" data-hop="1">2 · Fetch Signature-Agent</span><span class="arrow">→</span>
-        <span class="hop" data-hop="2">3 · Resolve JWKS</span><span class="arrow">→</span>
+        <span class="hop" data-hop="1">2 · Keyring lookup</span><span class="arrow">→</span>
+        <span class="hop" data-hop="2">3 · Component coverage</span><span class="arrow">→</span>
         <span class="hop" data-hop="3">4 · Freshness window (±120 s)</span><span class="arrow">→</span>
-        <span class="hop" data-hop="4">5 · Ed25519 verify</span><span class="arrow">→</span>
+        <span class="hop" data-hop="4">5 · Verify signature base</span><span class="arrow">→</span>
         <span class="hop" data-hop="5">6 · Trust decision</span>
       </div>
       <div style="margin-top:16px" id="verify-log" class="hdr-block">awaiting signed request…</div>
 
       <div class="stat-inline" style="margin-top:18px">
-        <div class="s"><div class="l">JWKS Fetches</div><div class="n" id="jwks-n">0</div></div>
+        <div class="s"><div class="l">Keyring lookups</div><div class="n" id="jwks-n">0</div></div>
         <div class="s"><div class="l">Verified</div><div class="n" id="jwks-ok" style="color:var(--green)">0</div></div>
         <div class="s"><div class="l">Rejected</div><div class="n" id="jwks-bad" style="color:var(--red)">0</div></div>
         <div class="s"><div class="l">Replay Window</div><div class="n">±120 s</div></div>
@@ -738,19 +739,25 @@ footer {
 <div class="section-head">
   <span class="idx">03</span>
   <h2>Shadow Agents · Stealth Engine Detection</h2>
-  <span class="note">Unsigned traffic &amp; patched browser engines</span>
+  <span class="note">Unsigned traffic &amp; patched browser engines · SIM / LIVE</span>
 </div>
 
 <div class="grid g-2">
   <div class="panel">
     <div class="panel-head">
       <h3>Evasion ↔ Detection Matrix</h3>
-      <span class="tag">2026 techniques</span>
+      <span class="tag">research notes · SIM</span>
     </div>
     <div class="panel-body tight scroll">
+      <div class="dim" style="font-size:11.5px;margin-bottom:10px;line-height:1.6">
+        <b>Research notes</b> on evasion techniques reported in public literature —
+        <u>not capabilities of this server</u> and not signals it collects. AEGIS classifies
+        what a request says about itself (User-Agent, signature headers, path): it runs no
+        browser instrumentation, no TLS fingerprinting and no behavioral biometrics.
+      </div>
       <table class="matrix">
         <thead>
-          <tr><th>Layer</th><th>Stealth Modification</th><th>Detection Vector</th></tr>
+          <tr><th>Layer</th><th>Stealth Modification</th><th>Reported detection vector (research)</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -880,7 +887,7 @@ footer {
 <div class="section-head">
   <span class="idx">05</span>
   <h2>Generative Engine Optimization · The Citation Economy</h2>
-  <span class="note">Tracking what agents search, read, and cite</span>
+  <span class="note">Tracking what agents search, read, and cite · SIM</span>
 </div>
 
 <div class="grid g-3">
@@ -891,17 +898,17 @@ footer {
     </div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h3>Category Entry Point Coverage</h3></div>
+    <div class="panel-head"><h3>Category Entry Point Coverage</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body">
       <canvas class="chart" id="chart-cep" height="165" role="img" aria-label="Citation and SEO chart" tabindex="0"></canvas>
       <div class="dim" style="font-size:11.5px;margin-top:8px">
         Distinct prompt contexts in which a brand becomes the definitive answer.
-        GEO uplift observed up to <span class="mono" style="color:var(--green)">+40%</span> visibility.
+        Illustrative uplift up to <span class="mono" style="color:var(--green)">+40%</span> visibility (SIM — no measurement runs in this project).
       </div>
     </div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h3>Semantic Extraction</h3></div>
+    <div class="panel-head"><h3>Semantic Extraction</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body">
       <div class="bar-row"><span class="name">JSON-LD adopted</span><div class="track"><div class="fill" style="width:71%;background:linear-gradient(90deg,var(--blue),var(--cyan))"></div></div><span class="num">71%</span></div>
       <div class="bar-row"><span class="name">TechArticle wrap</span><div class="track"><div class="fill" style="width:54%;background:linear-gradient(90deg,var(--blue),var(--cyan))"></div></div><span class="num">54%</span></div>
@@ -909,8 +916,8 @@ footer {
       <div class="bar-row"><span class="name">Unlinked mentions</span><div class="track"><div class="fill" style="width:63%;background:linear-gradient(90deg,var(--amber),var(--red))"></div></div><span class="num">63%</span></div>
       <div class="bar-row"><span class="name">Reddit/YouTube weight</span><div class="track"><div class="fill" style="width:47%;background:linear-gradient(90deg,var(--violet),var(--blue))"></div></div><span class="num">47%</span></div>
       <div class="dim" style="font-size:11.5px;margin-top:10px">
-        Pages with structured quotes + empirical statistics earn a
-        <span class="mono" style="color:var(--cyan)">30–40%</span> higher inclusion rate in generative answers.
+        Illustrative (SIM): pages with structured quotes + empirical statistics are
+        modeled at a <span class="mono" style="color:var(--cyan)">30–40%</span> higher inclusion rate in generative answers.
       </div>
     </div>
   </div>
@@ -920,7 +927,7 @@ footer {
 <div class="section-head">
   <span class="idx">06</span>
   <h2>WebMCP Ledger · Programmatic Agent Interactions</h2>
-  <span class="note">navigator.modelContext tool registry</span>
+  <span class="note">navigator.modelContext tool registry · SIM / LIVE</span>
 </div>
 
 <div class="panel">
@@ -949,13 +956,14 @@ footer {
 <div class="section-head">
   <span class="idx">07</span>
   <h2>The Economic Engine · Pay-Per-Crawl</h2>
-  <span class="note">HTTP 402 ledger · Traffic Acquisition Cost of agents</span>
+  <span class="note">HTTP 402 ledger · Traffic Acquisition Cost of agents · SIM</span>
 </div>
 
 <div class="grid g-21">
   <div class="panel">
     <div class="panel-head">
       <h3>Monetization Gateway Telemetry</h3>
+      <span class="tag">SIM · illustrative</span>
       <div class="right">
         <button class="btn active" data-range="1h">1H</button>
         <button class="btn" data-range="24h">24H</button>
@@ -968,13 +976,12 @@ footer {
         <div class="s"><div class="l">200 OK (Paid)</div><div class="n" style="color:var(--green)" id="ppc-200">—</div></div>
         <div class="s"><div class="l">402 Required</div><div class="n" style="color:var(--amber)" id="ppc-402">—</div></div>
         <div class="s"><div class="l">Avg Bid</div><div class="n" id="ppc-bid">—</div></div>
-        <div class="s"><div class="l">Gross Margin</div><div class="n" id="ppc-margin">—</div></div>
       </div>
     </div>
   </div>
 
   <div class="panel">
-    <div class="panel-head"><h3>Top AI-Driving Publishers</h3><span class="tag">revenue</span></div>
+    <div class="panel-head"><h3>Top AI-Driving Publishers</h3><span class="tag">SIM · illustrative</span></div>
     <div class="panel-body tight scroll">
       <table>
         <thead><tr><th>Publisher</th><th>Use Case</th><th>Bid</th><th>Revenue</th></tr></thead>
@@ -1045,7 +1052,7 @@ footer {
 <div class="section-head">
   <span class="idx">09</span>
   <h2>Defense Posture</h2>
-  <span class="note">Capability budgets · semantic validation gates</span>
+  <span class="note">Capability budgets · semantic validation gates · SIM</span>
 </div>
 
 <div class="grid g-3">
@@ -1056,7 +1063,7 @@ footer {
       <div class="bar-row"><span class="name">Writes / session</span><div class="track"><div class="fill" style="width:22%;background:var(--amber)"></div></div><span class="num">11/50</span></div>
       <div class="bar-row"><span class="name">Network egress</span><div class="track"><div class="fill" style="width:12%;background:var(--blue)"></div></div><span class="num">6/50</span></div>
       <div class="bar-row"><span class="name">Consequential act.</span><div class="track"><div class="fill" style="width:4%;background:var(--red)"></div></div><span class="num">1/25</span></div>
-      <div class="dim" style="font-size:11.5px;margin-top:8px">Budgets reset per session epoch; breach → hard halt + rollback queue.</div>
+      <div class="dim" style="font-size:11.5px;margin-top:8px">Budgets reset per session epoch; a breach is flagged in this simulated panel (SIM) — this server halts nothing.</div>
     </div>
   </div>
   <div class="panel">
@@ -1102,7 +1109,7 @@ footer {
 </main>
 
 <footer>
-  AEGIS // ORBITAL — Global AI Agent Observability Console · simulated telemetry demo · RFC 9421 / Web Bot Auth / WebMCP / trajectory monitor
+  AEGIS — Global AI Agent Observability Console · simulated telemetry demo · RFC 9421 / Web Bot Auth / WebMCP / trajectory monitor
 </footer>
 
 <!-- ══ WebMCP schema inspector (opens from any ledger row) ══ -->
@@ -1400,11 +1407,11 @@ async function runVerification() {
     $("#verify-log").textContent =
       `[${nowStamp()}] hop ${i + 1}/6 · ${[
         "parsing Signature-Input / Signature / Signature-Agent",
-        "resolving Signature-Agent URI",
-        `fetching JWKS (kid=${ag.kid})`,
+        `local keyring lookup (kid=${ag.kid})`,
+        "component coverage: @method / @authority / @path",
         "checking freshness window (±120 s)",
-        "Ed25519 signature verification over signature base",
-        "comparing keyid against the local keyring → verdict",
+        "verifying signature over the rebuilt signature base",
+        "key material + coverage + freshness → verdict",
       ][i]}`;
     await new Promise((r) => setTimeout(r, rndi(140, 320)));
   }
@@ -1459,15 +1466,18 @@ $("#registry-count").textContent = registry.length + " operators";
 
 /* ─────────────── Shadow-agent detection feed ───────────── */
 const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit fork", "Playwright vanilla", "Puppeteer-stealth"];
+/* SIM rows reuse the signal vocabulary the server actually emits
+   (AUTOMATION_RULES / browser-claim heuristic / missing-UA in server.js).
+   Simulated rows must never name a detector this project does not build:
+   no TLS-fingerprint analysis, no debugger-timing analysis, no pointer
+   dynamics — those live only in the framed research matrix in section 03. */
 const SIGNALS = [
-  ["isTrusted dispatch cadence", 97],
-  ["JA4+ TLS fingerprint drift", 91],
-  ["canvas fingerprint reuse", 99],
-  ["Bézier jitter regularity", 88],
-  ["CDP attach timing residual", 94],
-  ["Fitts-law dwell mismatch", 86],
-  ["Font metric degeneration gap", 90],
-  ["navigator.webdriver equivocation", 78],
+  ["Headless Chrome (patched-engine track)", 96],
+  ["automation framework", 92],
+  ["headless client", 90],
+  ["PhantomJS", 94],
+  ["Mozilla UA without sec-ch-ua / accept-language / sec-fetch-*", 82],
+  ["missing User-Agent header", 71],
 ];
 function fpHash() {
   return [8, 4, 4, 4, 12].map((n) => hex(n)).join("-");
@@ -2211,7 +2221,6 @@ function renderPpc() {
   $("#ppc-200").textContent = fmtInt(ppc200);
   $("#ppc-402").textContent = fmtInt(ppc402);
   $("#ppc-bid").textContent = "$0.0057 avg";
-  $("#ppc-margin").textContent = "72.4%";
 }
 renderPpc(); drawRevenue();
 setInterval(() => {
@@ -2743,7 +2752,7 @@ async function driveVerify(ev) {
       const steps = verdict
         ? [
             `parsing Signature-Input (${si.length} bytes), ${(si.match(/"/g) || []).length / 2 | 0} covered components`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             `local keyring lookup → kid=${kid}${verdict === "unresolved" ? " — NOT FOUND" : " ✓"}`,
             `coverage + freshness → ${/coverage|expired|future|missing/i.test(reason) ? "POLICY FAIL" : "within policy ✓"}`,
             `${alg} verify … ${verdict === "valid" ? "OK ✓" : verdict === "invalid" ? "FAILED ✗" : "SKIPPED — key material unavailable"}`,
@@ -2751,7 +2760,7 @@ async function driveVerify(ev) {
           ]
         : [
             `parsing Signature-Input (${si.length} bytes), components: ${/[:@][a-z]/i.test(si) ? "method/authority/path" : "custom"}`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             "local keyring lookup … no verdict attached to this event",
             `Content-Digest: ${ev.headers && ev.headers["content-digest"] ? "present ✓" : "absent — not covered"}`,
             "cryptographic verify … UNAVAILABLE (event predates the verifier)",

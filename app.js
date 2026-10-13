@@ -253,11 +253,11 @@ async function runVerification() {
     $("#verify-log").textContent =
       `[${nowStamp()}] hop ${i + 1}/6 · ${[
         "parsing Signature-Input / Signature / Signature-Agent",
-        "resolving Signature-Agent URI",
-        `fetching JWKS (kid=${ag.kid})`,
+        `local keyring lookup (kid=${ag.kid})`,
+        "component coverage: @method / @authority / @path",
         "checking freshness window (±120 s)",
-        "Ed25519 signature verification over signature base",
-        "comparing keyid against the local keyring → verdict",
+        "verifying signature over the rebuilt signature base",
+        "key material + coverage + freshness → verdict",
       ][i]}`;
     await new Promise((r) => setTimeout(r, rndi(140, 320)));
   }
@@ -312,15 +312,18 @@ $("#registry-count").textContent = registry.length + " operators";
 
 /* ─────────────── Shadow-agent detection feed ───────────── */
 const ENGINES = ["Chromium 131 (patched)", "Firefox Gecko (recompiled)", "WebKit fork", "Playwright vanilla", "Puppeteer-stealth"];
+/* SIM rows reuse the signal vocabulary the server actually emits
+   (AUTOMATION_RULES / browser-claim heuristic / missing-UA in server.js).
+   Simulated rows must never name a detector this project does not build:
+   no TLS-fingerprint analysis, no debugger-timing analysis, no pointer
+   dynamics — those live only in the framed research matrix in section 03. */
 const SIGNALS = [
-  ["isTrusted dispatch cadence", 97],
-  ["JA4+ TLS fingerprint drift", 91],
-  ["canvas fingerprint reuse", 99],
-  ["Bézier jitter regularity", 88],
-  ["CDP attach timing residual", 94],
-  ["Fitts-law dwell mismatch", 86],
-  ["Font metric degeneration gap", 90],
-  ["navigator.webdriver equivocation", 78],
+  ["Headless Chrome (patched-engine track)", 96],
+  ["automation framework", 92],
+  ["headless client", 90],
+  ["PhantomJS", 94],
+  ["Mozilla UA without sec-ch-ua / accept-language / sec-fetch-*", 82],
+  ["missing User-Agent header", 71],
 ];
 function fpHash() {
   return [8, 4, 4, 4, 12].map((n) => hex(n)).join("-");
@@ -1064,7 +1067,6 @@ function renderPpc() {
   $("#ppc-200").textContent = fmtInt(ppc200);
   $("#ppc-402").textContent = fmtInt(ppc402);
   $("#ppc-bid").textContent = "$0.0057 avg";
-  $("#ppc-margin").textContent = "72.4%";
 }
 renderPpc(); drawRevenue();
 setInterval(() => {
@@ -1596,7 +1598,7 @@ async function driveVerify(ev) {
       const steps = verdict
         ? [
             `parsing Signature-Input (${si.length} bytes), ${(si.match(/"/g) || []).length / 2 | 0} covered components`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             `local keyring lookup → kid=${kid}${verdict === "unresolved" ? " — NOT FOUND" : " ✓"}`,
             `coverage + freshness → ${/coverage|expired|future|missing/i.test(reason) ? "POLICY FAIL" : "within policy ✓"}`,
             `${alg} verify … ${verdict === "valid" ? "OK ✓" : verdict === "invalid" ? "FAILED ✗" : "SKIPPED — key material unavailable"}`,
@@ -1604,7 +1606,7 @@ async function driveVerify(ev) {
           ]
         : [
             `parsing Signature-Input (${si.length} bytes), components: ${/[:@][a-z]/i.test(si) ? "method/authority/path" : "custom"}`,
-            `resolving Signature-Agent → ${ev.signed.agent || "(header absent)"}`,
+            `signature-agent header → ${ev.signed.agent || "(header absent)"}`,
             "local keyring lookup … no verdict attached to this event",
             `Content-Digest: ${ev.headers && ev.headers["content-digest"] ? "present ✓" : "absent — not covered"}`,
             "cryptographic verify … UNAVAILABLE (event predates the verifier)",
