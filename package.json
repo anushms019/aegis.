@@ -3,6 +3,25 @@
   "version": "3.0.0",
   "description": "AEGIS — Global AI Agent Observability Console. Zero-dependency capture server + live dashboard that classifies signed (RFC 9421), known, shadow, tool, and human traffic.",
   "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/REPO.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OWNER/REPO/issues"
+  },
+  "homepage": "https://github.com/OWNER/REPO#readme",
+  "files": [
+    "server.js",
+    "build.js",
+    "index.html",
+    "app.js",
+    "styles.css",
+    "src/",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node server.js",
     "build": "node build.js",
@@ -19,6 +38,8 @@
     "rfc9421",
     "http-message-signatures",
     "bot-detection",
+    "prometheus",
+    "opentelemetry",
     "security"
   ],
   "author": "anushms",
