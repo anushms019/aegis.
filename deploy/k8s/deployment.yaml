@@ -41,6 +41,11 @@ spec:
               value: "8788"
             - name: NODE_ENV
               value: "production"
+            - name: AEGIS_ALLOW_INSECURE
+              valueFrom:
+                configMapKeyRef:
+                  name: aegis-config
+                  key: AEGIS_ALLOW_INSECURE
             - name: JWKS_ALLOWLIST
               valueFrom:
                 configMapKeyRef:

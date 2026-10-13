@@ -31,6 +31,39 @@ const HOST = process.env.HOST || "127.0.0.1";
 const ROOT = __dirname;
 const LOG_PATH = process.env.LOG_PATH || null;
 
+/* ── exposure policy ───────────────────────────────────────────
+   Loopback is the safe default: an unconfigured instance is reachable
+   only from the machine it runs on. Anything else (0.0.0.0, ::, a LAN or
+   public address, a hostname we cannot resolve locally) publishes the
+   dashboard, the SSE stream and /metrics, so it must be paired with
+   authentication — or with an explicit, deliberate opt-in. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+function isLoopbackBind(host) {
+  const h = String(host || "").trim().toLowerCase();
+  if (LOOPBACK_HOSTS.has(h)) return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  return false; // 0.0.0.0, ::, LAN/public IPs, hostnames → non-loopback
+}
+
+/* Refuses to start a non-loopback bind with no credentials configured.
+   Returns true when the process may continue. Called only when the file is
+   executed — requiring this module never enforces anything. */
+function exposureRefusal() {
+  if (isLoopbackBind(HOST)) return false;
+  if (process.env.AEGIS_ALLOW_INSECURE === "1") return false;
+  if (process.env.AEGIS_AUTH_USERS) return false; // parsed (fail-closed) by authUsers()
+  console.error(
+    `[auth] refusing to bind ${HOST}: AEGIS_AUTH_USERS is not set.\n` +
+    `        Binding a non-loopback address publishes the dashboard, the SSE stream\n` +
+    `        and /metrics to the network with no login. Fix one of:\n` +
+    `          1. set AEGIS_AUTH_USERS="user:pass:admin,user2:pass2:viewer" (SECURITY.md §7)\n` +
+    `          2. bind a loopback HOST instead (default 127.0.0.1)\n` +
+    `          3. set AEGIS_ALLOW_INSECURE=1 if something else authenticates\n` +
+    `             (a reverse proxy or network policy) — you are opting in on purpose`
+  );
+  return true;
+}
+
 /* ── request-target parsing (never throws) ────────────────────
    Node's HTTP parser hands us targets the WHATWG URL parser rejects
    (absolute-form "http://", "///", backslash targets), and `new URL`
@@ -1536,6 +1569,7 @@ if (require.main === module && LOG_PATH) {
 /* Only start the HTTP server / log tail when executed directly.
    Tests require() this module for its pure functions (classify, parseLogLine). */
 if (require.main === module) {
+  if (exposureRefusal()) process.exit(1);
   if (process.env.JWKS_PATH) {
     ensureJwksFresh();
     console.log(`[keys] JWKS keyring: ${process.env.JWKS_PATH} → ${verificationKeys.size} key(s)`);

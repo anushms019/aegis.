@@ -11,6 +11,12 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "8788"
+      # Demo posture: this publishes an UNAUTHENTICATED dashboard on the
+      # published port. The server refuses a non-loopback bind with no
+      # credentials, so the opt-in is explicit — delete this line and set
+      # AEGIS_AUTH_USERS for anything reachable beyond localhost.
+      AEGIS_ALLOW_INSECURE: "1"
+      # AEGIS_AUTH_USERS: "ops:s3cret:admin,dash:view:viewer"  # example only
       # Opt-in remote JWKS (default-deny). Exact https origins only:
       # JWKS_ALLOWLIST: "https://keys.example.com"
       # JWKS_PINS: "https://keys.example.com=sha256/<base64-spki>"

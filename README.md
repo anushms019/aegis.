@@ -118,6 +118,7 @@ the shadow-burst banner within seconds.
 | `JWKS_PINS`       | *(disabled)* | Per-origin TLS SPKI pins: `origin=sha256/<b64>\|<hex>,…` |
 | `JWKS_CA_FILE`    | *(system roots)* | Extra CA bundle (PEM) for private-PKI JWKS origins |
 | `AEGIS_AUTH_USERS` | *(disabled)* | HTTP Basic auth: `user:pass:role,…` — roles `admin`, `viewer`, `metrics` (`/api/health` stays open for probes) |
+| `AEGIS_ALLOW_INSECURE` | *(unset)* | Set to `1` to start a non-loopback `HOST` **without** `AEGIS_AUTH_USERS` — only when a proxy or network policy already authenticates. Without auth *and* without this flag the server refuses to bind. |
 | `OTLP_ENDPOINT`   | *(disabled)* | Collector root (`http://host:4318`) — exports every event as an OTLP span to `/v1/traces` |
 | `OTLP_FLUSH_MS`   | `3000`       | OTLP batch flush interval (50–60000 ms) |
 
@@ -129,8 +130,10 @@ so it never inflates what it reports.
 
 **Securing a remote deployment:** the default bind is `127.0.0.1`, which is
 safe for local use. If you set `HOST=0.0.0.0` (containers do), you publish the
-dashboard, the SSE stream and `/metrics` — set `AEGIS_AUTH_USERS` so every
-route except `/api/health` requires HTTP Basic login, with roles:
+dashboard, the SSE stream and `/metrics` — the server **refuses to start**
+unless you also set `AEGIS_AUTH_USERS` or explicitly opt in with
+`AEGIS_ALLOW_INSECURE=1`. With credentials set, every route except
+`/api/health` requires HTTP Basic login, with roles:
 
 - `admin` — dashboard, snapshot, SSE, `/metrics`
 - `viewer` — dashboard, snapshot, SSE (scrapers cannot use it for `/metrics`)
@@ -152,7 +155,10 @@ kubectl apply -k deploy/k8s/         # probes: /api/health + /api/snapshot
 ```
 
 The multi-stage `Dockerfile` runs the full test suite inside the build stage,
-ships a non-root minimal runtime, and declares a `HEALTHCHECK`.
+ships a non-root minimal runtime, and declares a `HEALTHCHECK`. The image
+binds `0.0.0.0`, so it starts only when `AEGIS_AUTH_USERS` is set or you opt
+in explicitly with `AEGIS_ALLOW_INSECURE=1` — `docker compose up` and the
+`docker run` below are local demos and opt in on purpose.
 
 **Signed verification in a container** needs the keyring mounted — keys are
 never baked into the image:
@@ -160,8 +166,12 @@ never baked into the image:
 ```bash
 # placeholder keyring so the bind-mount source exists (the demo rewrites it):
 printf '{"keys":[]}' > .demo-jwks.json
+# AEGIS_ALLOW_INSECURE=1 is the explicit opt-in for an unauthenticated
+# non-loopback bind; for anything beyond your own machine use
+#   -e AEGIS_AUTH_USERS="user:pass:admin"  instead.
 MSYS_NO_PATHCONV=1 docker run --rm -p 8788:8788 \
   -e JWKS_PATH=/app/.demo-jwks.json \
+  -e AEGIS_ALLOW_INSECURE=1 \
   -v "$PWD/.demo-jwks.json:/app/.demo-jwks.json:ro" aegis:local
 ```
 

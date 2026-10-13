@@ -130,8 +130,24 @@ entries with an empty or unknown role are **dropped** and a configuration
 with zero parseable users **denies everything** (a typo fails closed, never
 open); refusals are counted in `aegis_auth_failures_total{result=…}` so brute
 force is observable. The default (variable unset) is open — acceptable only
-on the default `127.0.0.1` bind. **Any non-loopback deployment must set
-`AEGIS_AUTH_USERS` or front the server with an authenticating proxy.**
+on the default `127.0.0.1` bind.
+
+**Non-loopback binds are refused without credentials.** If `HOST` is not a
+loopback address and neither `AEGIS_AUTH_USERS` nor `AEGIS_ALLOW_INSECURE=1`
+is set, the process prints what to do and exits 1 **before** binding: a
+container that would publish an open dashboard fails to start instead of
+succeeding quietly. Choose one of:
+
+1. set `AEGIS_AUTH_USERS="user:pass:role,…"` (table above);
+2. keep the loopback bind (the default);
+3. set `AEGIS_ALLOW_INSECURE=1` — an explicit, deliberate opt-in for the
+   case where a reverse proxy, VPN or network policy already authenticates
+   and authorizes access.
+
+The bundled `docker-compose.yml` and `deploy/k8s/` examples set
+`AEGIS_ALLOW_INSECURE=1` so they run out of the box as **local demos**;
+delete that variable and supply `AEGIS_AUTH_USERS` before exposing the port
+to anything you do not control.
 
 **Bounded telemetry state.** `counters.byPath` keys are attacker-controlled;
 the map is capped (200 entries, 200-char keys, lowest-count eviction) so a

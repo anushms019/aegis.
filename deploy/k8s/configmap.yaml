@@ -7,6 +7,12 @@ metadata:
   labels:
     app: aegis
 data:
+  # Demo posture: the Deployment binds 0.0.0.0, and the server refuses a
+  # non-loopback bind with no credentials, so the example opts in explicitly.
+  # For a real deployment set AEGIS_AUTH_USERS (ideally from a Secret) and
+  # delete AEGIS_ALLOW_INSECURE — see SECURITY.md §7.
+  AEGIS_ALLOW_INSECURE: "1"
+  # AEGIS_AUTH_USERS: "user:pass:admin,reader:pass:viewer"   # example only
   JWKS_ALLOWLIST: ""
   # Example (exact origins only, no paths, no wildcards):
   # JWKS_ALLOWLIST: "https://keys.example.com,https://keys2.example.com"

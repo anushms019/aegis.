@@ -7,7 +7,8 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+const net = require("node:net");
 const path = require("node:path");
 const { classify, parseLogLine } = require("../server.js");
 
@@ -177,4 +178,110 @@ test("no server fatal handlers are installed under the test runner", () => {
   assert.notEqual(child.status, 0, "Node's default (crash, non-zero) must still apply");
   assert.ok(!/\[fatal\]/.test(child.stderr),
     "server.js must leave fatal errors to the test runner");
+});
+
+/* ── exposure policy (task P2-1) ────────────────────────────
+   A non-loopback bind with no credentials must refuse to start; loopback,
+   an explicit AEGIS_ALLOW_INSECURE=1, or a configured AEGIS_AUTH_USERS
+   must all start normally. Each case is a real child process, because the
+   refusal happens on the execution path only (requiring the module must
+   never enforce it). */
+
+function serverEnv(overrides) {
+  const env = { ...process.env, ...overrides };
+  delete env.NODE_TEST_CONTEXT;   // run exactly as an operator would
+  delete env.AEGIS_AUTH_USERS;    // no credentials unless a case says so
+  delete env.AEGIS_ALLOW_INSECURE;
+  delete env.OTLP_ENDPOINT;
+  delete env.JWKS_PATH;
+  return { ...env, ...overrides };
+}
+
+function startServer(overrides) {
+  const child = spawn(process.execPath, [serverPath], {
+    env: serverEnv(overrides),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  const exited = new Promise((res) => child.on("exit", (code) => res(code)));
+  return { child, output: () => out, exited };
+}
+
+async function freePort() {
+  return new Promise((res) => {
+    const s = net.createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => res(p));
+    });
+  });
+}
+
+async function waitForOutput(srv, re, ms = 8000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (re.test(srv.output())) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return re.test(srv.output());
+}
+
+/* Bounded wait for an exit: a missing refusal must fail the assertion, not
+   hang the suite (the test runner has no default timeout). */
+async function exitCode(srv, ms = 10000) {
+  const code = await Promise.race([
+    srv.exited,
+    new Promise((r) => setTimeout(() => r(undefined), ms)),
+  ]);
+  if (code === undefined) srv.child.kill();
+  return code;
+}
+
+test("non-loopback bind without credentials refuses to start", async () => {
+  for (const host of ["0.0.0.0", "::", "192.168.7.7"]) {
+    const srv = startServer({ HOST: host, PORT: String(await freePort()) });
+    const code = await exitCode(srv);
+    assert.ok(code !== undefined,
+      `HOST=${host} never exited — refusal is missing? ${srv.output()}`);
+    assert.notEqual(code, 0, `HOST=${host} must exit non-zero, output: ${srv.output()}`);
+    assert.match(srv.output(), /refusing to bind/, `HOST=${host}: wrong message: ${srv.output()}`);
+    assert.match(srv.output(), /AEGIS_ALLOW_INSECURE/, `HOST=${host}: must name the escape hatch`);
+    assert.ok(!/AEGIS capture server/.test(srv.output()), `HOST=${host} must not listen`);
+  }
+});
+
+test("loopback bind starts without credentials (safe default unchanged)", async () => {
+  const srv = startServer({ HOST: "127.0.0.1", PORT: String(await freePort()) });
+  assert.ok(await waitForOutput(srv, /AEGIS capture server/),
+    `loopback should start: ${srv.output()}`);
+  srv.child.kill();
+  await srv.exited;
+});
+
+test("non-loopback bind with AEGIS_AUTH_USERS configured starts", async () => {
+  const srv = startServer({
+    HOST: "0.0.0.0",
+    PORT: String(await freePort()),
+    AEGIS_AUTH_USERS: "ops:pw123:admin,dash:vw123:viewer",
+  });
+  assert.ok(await waitForOutput(srv, /AEGIS capture server/),
+    `auth-configured bind should start: ${srv.output()}`);
+  assert.match(srv.output(), /\[auth\] enabled/);
+  srv.child.kill();
+  await srv.exited;
+});
+
+test("AEGIS_ALLOW_INSECURE=1 is an explicit opt-in that still starts", async () => {
+  const srv = startServer({
+    HOST: "0.0.0.0",
+    PORT: String(await freePort()),
+    AEGIS_ALLOW_INSECURE: "1",
+  });
+  assert.ok(await waitForOutput(srv, /AEGIS capture server/),
+    `explicit opt-in should start: ${srv.output()}`);
+  assert.match(srv.output(), /\[auth\] disabled/);
+  srv.child.kill();
+  await srv.exited;
 });
